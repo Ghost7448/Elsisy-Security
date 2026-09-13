@@ -64,6 +64,10 @@ function attachmentIsImage(a) {
   return /^image\\//i.test(a.contentType || '') || /\\.(png|jpe?g|gif|webp|avif)$/i.test(a.name || '');
 }
 
+function attachmentIsVideo(a) {
+  return /^video\//i.test(a.contentType || '') || /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(a.name || '');
+}
+
 function attachmentList(message) {
   return [...message.attachments.values()].map(a => ({
     name: a.name || 'Attachment',
@@ -212,30 +216,36 @@ async function sendSecurityLog(data, timeoutResult, targetMember) {
         new ButtonBuilder().setCustomId(`security:history:${data.author.id}`).setLabel('History').setStyle(ButtonStyle.Primary)
       )];
 
-  // أضف كل الصور داخل نفس رسالة اللوج. كل صورة تظهر ويمكن الضغط عليها لفتحها/تحميلها.
+  // تنظيم الصور والفيديوهات والملفات بروابط منفصلة داخل نفس اللوج.
   const images = data.attachments.filter(attachmentIsImage);
+  const videos = data.attachments.filter(attachmentIsVideo);
+  const other = data.attachments.filter(a => !attachmentIsImage(a) && !attachmentIsVideo(a));
+
   if (images.length) {
     embed.addFields({
       name: `🖼️ الصور (${images.length})`,
-      value: images.slice(0, 20).map((a, i) => `• [🖼️ صورة ${i + 1} — اضغط للفتح/التحميل](${a.url})`).join('\n')
+      value: images.slice(0, 20).map((a, i) => `• [🖼️ صورة ${i + 1} — فتح / تحميل](${a.url})`).join('\n')
     });
   }
 
-  // Discord يسمح بصورة واحدة معروضة داخل كل Embed، لذلك لو الصور متعددة
-  // نرسلها كمرفقات/روابط في نفس اللوج مع عرض أول صورة داخل الـ Embed.
+  if (videos.length) {
+    embed.addFields({
+      name: `🎥 الفيديوهات (${videos.length})`,
+      value: videos.slice(0, 20).map((a, i) => `• [🎥 فيديو ${i + 1} — فتح / تحميل](${a.url})`).join('\n')
+    });
+  }
+
+  if (other.length) {
+    embed.addFields({
+      name: `📎 ملفات أخرى (${other.length})`,
+      value: other.slice(0, 20).map((a, i) => `• [📄 ${a.name || `ملف ${i + 1}`} — تحميل](${a.url})`).join('\n')
+    });
+  }
+
+  // أول صورة تظهر كمعاينة داخل الـ Embed، والباقي بروابط منفصلة.
   if (images.length) embed.setImage(images[0].url);
 
   await channel.send({ embeds: [embed], components }).catch(() => {});
-
-  const other = data.attachments.filter(a => !attachmentIsImage(a));
-  if (other.length) {
-    const e = new EmbedBuilder()
-      .setColor(0xE53935)
-      .setTitle('📎 المرفقات')
-      .setDescription(other.slice(0, 20).map(a => `• [${a.name}](${a.url})`).join('\n'));
-    addFooter(e);
-    await channel.send({ embeds: [e] }).catch(() => {});
-  }
 
 }
 
