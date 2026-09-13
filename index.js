@@ -212,21 +212,20 @@ async function sendSecurityLog(data, timeoutResult, targetMember) {
         new ButtonBuilder().setCustomId(`security:history:${data.author.id}`).setLabel('History').setStyle(ButtonStyle.Primary)
       )];
 
-  await channel.send({ embeds: [embed], components }).catch(() => {});
-
+  // أضف كل الصور داخل نفس رسالة اللوج. كل صورة تظهر ويمكن الضغط عليها لفتحها/تحميلها.
   const images = data.attachments.filter(attachmentIsImage);
-  for (let i = 0; i < images.length; i += 10) {
-    const embeds = images.slice(i, i + 10).map((a, index) => {
-      const e = new EmbedBuilder()
-        .setColor(0xE53935)
-        .setTitle(`🖼️ صورة ${i + index + 1}`)
-        .setURL(a.url)
-        .setImage(a.url);
-      addFooter(e);
-      return e;
+  if (images.length) {
+    embed.addFields({
+      name: `🖼️ الصور (${images.length})`,
+      value: images.slice(0, 20).map((a, i) => `• [🖼️ صورة ${i + 1} — اضغط للفتح/التحميل](${a.url})`).join('\n')
     });
-    await channel.send({ embeds }).catch(() => {});
   }
+
+  // Discord يسمح بصورة واحدة معروضة داخل كل Embed، لذلك لو الصور متعددة
+  // نرسلها كمرفقات/روابط في نفس اللوج مع عرض أول صورة داخل الـ Embed.
+  if (images.length) embed.setImage(images[0].url);
+
+  await channel.send({ embeds: [embed], components }).catch(() => {});
 
   const other = data.attachments.filter(a => !attachmentIsImage(a));
   if (other.length) {
