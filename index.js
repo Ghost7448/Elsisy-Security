@@ -61,7 +61,7 @@ function addFooter(embed) {
 }
 
 function attachmentIsImage(a) {
-  return /^image\\//i.test(a.contentType || '') || /\\.(png|jpe?g|gif|webp|avif)$/i.test(a.name || '');
+  return /^image\//i.test(a.contentType || '') || /\.(png|jpe?g|gif|webp|avif)$/i.test(a.name || '');
 }
 
 function attachmentIsVideo(a) {
