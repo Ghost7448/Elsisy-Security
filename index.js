@@ -972,21 +972,11 @@ client.on(
         وكل رول في سطر
       */
 
-      const roles =
-        member.roles.cache
-          .filter(
-            role =>
-              role.id !== guild.id
-          )
-          .sort(
-            (a, b) =>
-              b.position - a.position
-          )
-          .map(
-            role =>
-              `• ${role}`
-          )
-          .slice(0, 20);
+const roles = member.roles.cache
+  .filter(r => r.id !== guild.id)
+  .sort((a,b) => b.position - a.position)
+  .map(r => r.name)
+  .slice(0, 20);
 
       const timeout =
         member.communicationDisabledUntilTimestamp >
