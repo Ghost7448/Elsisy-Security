@@ -76,6 +76,27 @@ function attachmentList(message) {
   }));
 }
 
+function formatMessageContent(content, attachments = []) {
+  const text = String(content ?? '').trim();
+  const images = attachments.filter(attachmentIsImage);
+  const videos = attachments.filter(attachmentIsVideo);
+  const other = attachments.filter(a => !attachmentIsImage(a) && !attachmentIsVideo(a));
+
+  const mediaSummary = [];
+  if (images.length) mediaSummary.push(`🖼️ ${images.length} صورة`);
+  if (videos.length) mediaSummary.push(`🎥 ${videos.length} فيديو`);
+  if (other.length) mediaSummary.push(`📎 ${other.length} ملف`);
+
+  if (text && mediaSummary.length) {
+    return `${text}\n\n📦 المرفقات: ${mediaSummary.join(' • ')}`;
+  }
+  if (text) return text;
+  if (mediaSummary.length) {
+    return `📦 تم إرسال: ${mediaSummary.join(' • ')}\n\n🔗 الروابط موجودة في الأقسام بالأسفل.`;
+  }
+  return 'بدون محتوى';
+}
+
 async function getGuild(id) {
   return client.guilds.fetch(id).catch(() => null);
 }
@@ -171,7 +192,7 @@ async function sendSecurityLog(data, timeoutResult, targetMember) {
     .setTitle(higherRole ? '⚠️ SECURITY ALERT — HIGHER ROLE' : '🛡️ SECURITY ALERT')
     .setDescription(
       higherRole
-        ? '**تم اكتشاف رسالة، لكن البوت لم يستطع عمل Timeout لأن العضو أعلى/مساوي للبوت. تم حذف الرسالة ومحاولة تنظيف رسائله.**'
+        ? '**تم اكتشاف رسالة، لكن البوت لم يستطع عمل Timeout لأن العضو أعلى/مساوي للبوت. تم حذف الرسالة المخالفة فقط.**'
         : '**تم اكتشاف رسالة في روم الحماية واتخاذ إجراء تلقائي وتم حذف الرسالة المخالفة فقط.**'
     )
     .addFields(
@@ -198,8 +219,8 @@ async function sendSecurityLog(data, timeoutResult, targetMember) {
         value: cut(CONFIG.reason)
       },
       {
-        name: '💬 الرسالة',
-        value: cut(data.content)
+        name: '💬 محتوى الرسالة',
+        value: cut(formatMessageContent(data.content, data.attachments))
       }
     )
     .setThumbnail(data.author.displayAvatarURL({ size: 256 }))
