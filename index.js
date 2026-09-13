@@ -12,8 +12,15 @@ const {
   REST,
   Routes,
   PermissionsBitField,
-  Events
+  Events,
+  AuditLogEvent
 } = require('discord.js');
+
+/*
+================================================
+CONFIG
+================================================
+*/
 
 const CONFIG = {
   token: process.env.TOKEN?.trim(),
@@ -42,22 +49,81 @@ if (
   process.exit(1);
 }
 
+/*
+================================================
+CLIENT
+================================================
+*/
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildModeration,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ],
 
   partials: [
     Partials.Channel,
-    Partials.Message
+    Partials.Message,
+    Partials.GuildMember
   ]
 });
 
+/*
+================================================
+CONSTANTS
+================================================
+*/
+
+const ORIGINAL_SECURITY_DESCRIPTION =
+  'تم اكتشاف رسالة في روم الحماية واتخاذ إجراء تلقائي وتم حذف الرسالة المخالفة فقط.';
+
+/*
+================================================
+BOT ACTION TRACKING
+================================================
+*/
+
+const botActions = new Map();
+
+function markBotAction(type, userId) {
+  const key = `${type}:${userId}`;
+
+  botActions.set(key, Date.now());
+
+  setTimeout(() => {
+    botActions.delete(key);
+  }, 30000);
+}
+
+function isBotAction(type, userId) {
+  const key = `${type}:${userId}`;
+  const timestamp = botActions.get(key);
+
+  if (!timestamp) {
+    return false;
+  }
+
+  if (Date.now() - timestamp > 30000) {
+    botActions.delete(key);
+    return false;
+  }
+
+  return true;
+}
+
+/*
+================================================
+UTILS
+================================================
+*/
+
 const cut = (value, max = 1024) => {
-  const text = String(value ?? '').trim() || 'بدون محتوى';
+  const text =
+    String(value ?? '').trim() ||
+    'بدون محتوى';
 
   return text.length > max
     ? `${text.slice(0, max - 3)}...`
@@ -113,18 +179,14 @@ function attachmentList(message) {
 function formatMessageContent(content, attachments = []) {
   const text = String(content ?? '').trim();
 
-  const images =
-    attachments.filter(attachmentIsImage);
+  const images = attachments.filter(attachmentIsImage);
+  const videos = attachments.filter(attachmentIsVideo);
 
-  const videos =
-    attachments.filter(attachmentIsVideo);
-
-  const other =
-    attachments.filter(
-      a =>
-        !attachmentIsImage(a) &&
-        !attachmentIsVideo(a)
-    );
+  const other = attachments.filter(
+    a =>
+      !attachmentIsImage(a) &&
+      !attachmentIsVideo(a)
+  );
 
   const summary = [];
 
@@ -149,24 +211,24 @@ function formatMessageContent(content, attachments = []) {
   }
 
   if (summary.length) {
-    return (
-      `📦 تم إرسال: ${summary.join(' • ')}\n\n` +
-      '🔗 الروابط موجودة في الأقسام بالأسفل.'
-    );
+    return `📦 تم إرسال: ${summary.join(' • ')}\n\n🔗 الروابط موجودة في الأقسام بالأسفل.`;
   }
 
   return 'بدون محتوى';
 }
 
+/*
+================================================
+GUILD / CHANNEL
+================================================
+*/
+
 async function getGuild(id) {
-  return client.guilds
-    .fetch(id)
-    .catch(() => null);
+  return client.guilds.fetch(id).catch(() => null);
 }
 
 async function getLogChannel() {
-  const guild =
-    await getGuild(CONFIG.logGuildId);
+  const guild = await getGuild(CONFIG.logGuildId);
 
   if (!guild) {
     return null;
@@ -200,6 +262,12 @@ function canUseSecurityCommand(interaction) {
   );
 }
 
+/*
+================================================
+COMMAND REGISTER
+================================================
+*/
+
 async function registerCommands() {
   const command =
     new SlashCommandBuilder()
@@ -216,14 +284,18 @@ async function registerCommands() {
   await rest.put(
     Routes.applicationCommands(client.user.id),
     {
-      body: [
-        command.toJSON()
-      ]
+      body: [command.toJSON()]
     }
   );
 
   console.log('✅ /security registered');
 }
+
+/*
+================================================
+SECURITY PANEL
+================================================
+*/
 
 async function sendSecurityPanel(channel) {
   const embed =
@@ -255,7 +327,7 @@ async function sendSecurityPanel(channel) {
 
         'إذا تم تفعيل نظام الحماية على حسابك، فقد يشير ذلك إلى أن حسابك تعرض للاختراق أو تم استخدامه لإرسال رسائل غير مصرح بها.\n\n' +
 
-        'في حال كنت تعتقد أن الإجراء تم بالخطأ، يرجى التواصل مع الإدارة بعد تأمين حسابك.'
+        'في حال كنت تعتقد أن الإجراء تم بالخطأ، يرجى التواصل مع <@1229173247157997721> بعد تأمين حسابك.'
       )
 
       .setTimestamp();
@@ -269,18 +341,22 @@ async function sendSecurityPanel(channel) {
   return channel.send({
     content: '@everyone',
     embeds: [embed],
-
     allowedMentions: {
       parse: ['everyone']
     }
   });
 }
 
+/*
+================================================
+TIMEOUT
+================================================
+*/
+
 async function doTimeout(member) {
   if (!member?.moderatable) {
     return {
       ok: false,
-
       error:
         'البوت لا يستطيع عمل Timeout لهذا العضو لأن رتبته أعلى/مساوية للبوت أو لأنه Server Owner.'
     };
@@ -299,7 +375,6 @@ async function doTimeout(member) {
   } catch (error) {
     return {
       ok: false,
-
       error:
         error.message ||
         'فشل تنفيذ Timeout'
@@ -308,9 +383,9 @@ async function doTimeout(member) {
 }
 
 /*
-========================
+================================================
 BUTTONS
-========================
+================================================
 */
 
 function actionButtons(userId) {
@@ -403,11 +478,6 @@ function afterKickButtons(userId) {
     );
 }
 
-/*
-بعد BAN
-يظهر Un Ban
-*/
-
 function afterBanButtons(userId) {
   return new ActionRowBuilder()
     .addComponents(
@@ -431,11 +501,6 @@ function afterBanButtons(userId) {
         .setStyle(ButtonStyle.Secondary)
     );
 }
-
-/*
-بعد Un Ban
-History + User Info فقط
-*/
 
 function afterUnbanButtons(userId) {
   return new ActionRowBuilder()
@@ -474,9 +539,132 @@ function infoButtons(userId) {
 }
 
 /*
-========================
+================================================
+EMBED / MESSAGE HELPERS
+================================================
+*/
+
+function hasButton(message, customId) {
+  return message.components.some(
+    row =>
+      row.components.some(
+        button =>
+          button.customId === customId
+      )
+  );
+}
+
+function getUserFromEmbed(embed) {
+  const userField =
+    embed.fields?.find(
+      field =>
+        field.name === '👤 العضو'
+    );
+
+  if (!userField) {
+    return null;
+  }
+
+  const match =
+    userField.value.match(
+      /ID:\s*`(\d+)`/
+    );
+
+  return match
+    ? match[1]
+    : null;
+}
+
+function isOriginalSecurityCase(message, userId) {
+  if (!message.embeds.length) {
+    return false;
+  }
+
+  const embed = message.embeds[0];
+
+  const embedUserId =
+    getUserFromEmbed(embed);
+
+  if (embedUserId !== userId) {
+    return false;
+  }
+
+  return (
+    embed.description || ''
+  ).includes(
+    ORIGINAL_SECURITY_DESCRIPTION
+  );
+}
+
+/*
+================================================
+GET LATEST CASE ONLY
+مهم جدًا:
+بيرجع أحدث Embed للعضو فقط
+عشان الحالات القديمة متتغيرش
+================================================
+*/
+
+async function getLatestCaseMessage(
+  userId,
+  filter = null
+) {
+  const logChannel =
+    await getLogChannel();
+
+  if (!logChannel?.isTextBased()) {
+    return null;
+  }
+
+  const messages =
+    await logChannel.messages
+      .fetch({ limit: 100 })
+      .catch(() => null);
+
+  if (!messages) {
+    return null;
+  }
+
+  const cases =
+    [...messages.values()]
+      .filter(message => {
+
+        if (!message.embeds.length) {
+          return false;
+        }
+
+        const embedUserId =
+          getUserFromEmbed(
+            message.embeds[0]
+          );
+
+        if (embedUserId !== userId) {
+          return false;
+        }
+
+        if (
+          filter &&
+          !filter(message)
+        ) {
+          return false;
+        }
+
+        return true;
+      })
+
+      .sort(
+        (a, b) =>
+          b.createdTimestamp -
+          a.createdTimestamp
+      );
+
+  return cases[0] || null;
+}
+
+/*
+================================================
 SECURITY LOG
-========================
+================================================
 */
 
 async function sendSecurityLog(
@@ -512,7 +700,7 @@ async function sendSecurityLog(
       .setDescription(
         higherRole
           ? '**تم اكتشاف رسالة، لكن البوت لم يستطع عمل Timeout لأن العضو أعلى/مساوي للبوت. تم حذف الرسالة المخالفة فقط.**'
-          : '**تم اكتشاف رسالة في روم الحماية واتخاذ إجراء تلقائي وتم حذف الرسالة المخالفة فقط.**'
+          : `**${ORIGINAL_SECURITY_DESCRIPTION}**`
       )
 
       .addFields(
@@ -537,22 +725,26 @@ async function sendSecurityLog(
         {
           name: '⏱️ Timeout',
 
-          value: timeoutResult.ok
-            ? `✅ تم عمل Timeout لمدة **${durationText(CONFIG.timeoutMinutes)}**`
-            : `❌ لم يتم عمل Timeout\n${cut(timeoutResult.error)}`
+          value:
+            timeoutResult.ok
+              ? `✅ تم عمل Timeout لمدة **${durationText(CONFIG.timeoutMinutes)}**`
+              : `❌ لم يتم عمل Timeout\n${cut(timeoutResult.error)}`
         },
 
         {
           name: '🗑️ الرسالة المخالفة',
 
-          value: data.currentDeleted
-            ? '✅ تم حذف الرسالة داخل روم الحماية'
-            : '❌ تعذر حذف الرسالة'
+          value:
+            data.currentDeleted
+              ? '✅ تم حذف الرسالة داخل روم الحماية'
+              : '❌ تعذر حذف الرسالة'
         },
 
         {
           name: '📝 السبب',
-          value: cut(CONFIG.reason)
+
+          value:
+            cut(CONFIG.reason)
         },
 
         {
@@ -612,7 +804,6 @@ async function sendSecurityLog(
   if (images.length) {
     embed.addFields({
       name: `🖼️ الصور (${images.length})`,
-
       value:
         images
           .slice(0, 20)
@@ -627,7 +818,6 @@ async function sendSecurityLog(
   if (videos.length) {
     embed.addFields({
       name: `🎥 الفيديوهات (${videos.length})`,
-
       value:
         videos
           .slice(0, 20)
@@ -642,7 +832,6 @@ async function sendSecurityLog(
   if (other.length) {
     embed.addFields({
       name: `📎 ملفات أخرى (${other.length})`,
-
       value:
         other
           .slice(0, 20)
@@ -665,9 +854,9 @@ async function sendSecurityLog(
 }
 
 /*
-========================
+================================================
 ADMIN LOG
-========================
+================================================
 */
 
 async function sendActionLogToAdmin(
@@ -711,14 +900,16 @@ async function sendActionLogToAdmin(
       )
 
       .setTitle(
-        `🛡️ SECURITY LOG — ${actionNames[action] || action.toUpperCase()}`
+        `🛡️ SECURITY LOG — ${
+          actionNames[action] ||
+          action.toUpperCase()
+        }`
       )
 
       .addFields(
 
         {
           name: '👤 العضو',
-
           value:
             `${target}\n` +
             `ID: \`${targetId}\``
@@ -733,7 +924,6 @@ async function sendActionLogToAdmin(
 
         {
           name: '🛡️ بواسطة',
-
           value:
             `${interaction.user}\n` +
             `ID: \`${interaction.user.id}\``
@@ -741,7 +931,6 @@ async function sendActionLogToAdmin(
 
         {
           name: '📌 النتيجة',
-
           value:
             success
               ? '✅ تمت العملية'
@@ -759,9 +948,9 @@ async function sendActionLogToAdmin(
 }
 
 /*
-========================
+================================================
 PERFORM ACTION
-========================
+================================================
 */
 
 async function performAction(
@@ -774,7 +963,7 @@ async function performAction(
 
   if (!sourceGuild) {
     throw new Error(
-      'تعذر العثور على سيرفر الحماية. تأكد من PROTECTED_CHANNEL_ID.'
+      'تعذر العثور على سيرفر الحماية.'
     );
   }
 
@@ -791,7 +980,7 @@ async function performAction(
 
     if (!ban) {
       throw new Error(
-        'هذا العضو ليس محظورًا حاليًا أو لم يتم العثور عليه في قائمة الباند.'
+        'هذا العضو ليس محظورًا حاليًا.'
       );
     }
 
@@ -805,7 +994,6 @@ async function performAction(
         id: targetId,
         user: ban.user
       },
-
       success: true
     };
   }
@@ -834,7 +1022,6 @@ async function performAction(
       return {
         member,
         success: true,
-
         note:
           'العضو ليس عليه Timeout حاليًا.'
       };
@@ -842,7 +1029,7 @@ async function performAction(
 
     if (!member.moderatable) {
       throw new Error(
-        'البوت لا يستطيع فك Timeout لهذا العضو بسبب الرتبة أو كونه Server Owner.'
+        'البوت لا يستطيع فك Timeout لهذا العضو.'
       );
     }
 
@@ -865,9 +1052,11 @@ async function performAction(
 
     if (!member.kickable) {
       throw new Error(
-        'البوت لا يستطيع طرد هذا العضو بسبب الرتبة أو كونه Server Owner.'
+        'البوت لا يستطيع طرد هذا العضو.'
       );
     }
+
+    markBotAction('kick', targetId);
 
     await member.kick(
       `Security Kick بواسطة ${interaction.user.tag}`
@@ -887,14 +1076,15 @@ async function performAction(
 
     if (!member.bannable) {
       throw new Error(
-        'البوت لا يستطيع حظر هذا العضو بسبب الرتبة أو كونه Server Owner.'
+        'البوت لا يستطيع حظر هذا العضو.'
       );
     }
+
+    markBotAction('ban', targetId);
 
     await member.ban({
       reason:
         `Security BAN بواسطة ${interaction.user.tag}`,
-
       deleteMessageSeconds: 0
     });
 
@@ -904,40 +1094,23 @@ async function performAction(
     };
   }
 
-  throw new Error(
-    'عملية غير معروفة.'
-  );
+  throw new Error('عملية غير معروفة.');
 }
 
 /*
-========================
+================================================
 READY
-========================
+================================================
 */
 
 client.once(
   Events.ClientReady,
   async () => {
 
-    console.log(
-      `✅ ${client.user.tag} شغال`
-    );
-
-    console.log(
-      `🛡️ Protected: ${CONFIG.protectedChannelId}`
-    );
-
-    console.log(
-      `📋 Logs: ${CONFIG.logGuildId}/${CONFIG.logChannelId}`
-    );
-
-    console.log(
-      `🔐 Security role: ${CONFIG.securityRoleId}`
-    );
-
-    console.log(
-      `📩 Admin DM log user: ${CONFIG.adminLogUserId}`
-    );
+    console.log(`✅ ${client.user.tag} شغال`);
+    console.log(`🛡️ Protected: ${CONFIG.protectedChannelId}`);
+    console.log(`📋 Logs: ${CONFIG.logGuildId}/${CONFIG.logChannelId}`);
+    console.log(`🔐 Security role: ${CONFIG.securityRoleId}`);
 
     try {
       await registerCommands();
@@ -952,9 +1125,9 @@ client.once(
 );
 
 /*
-========================
+================================================
 MAIN INTERACTIONS
-========================
+================================================
 */
 
 client.on(
@@ -970,13 +1143,10 @@ client.on(
       interaction.commandName === 'security'
     ) {
 
-      if (
-        !canUseSecurityCommand(interaction)
-      ) {
+      if (!canUseSecurityCommand(interaction)) {
         return interaction.reply({
           content:
             '❌ معندكش صلاحية تستخدم الأمر ده.',
-
           flags: 64
         });
       }
@@ -988,7 +1158,6 @@ client.on(
         return interaction.reply({
           content:
             '❌ الأمر ده لازم يتستخدم داخل روم الحماية.',
-
           flags: 64
         });
       }
@@ -1013,10 +1182,6 @@ client.on(
       return;
     }
 
-    /*
-    CONFIRM BUTTONS
-    */
-
     if (
       interaction.customId.startsWith('security-confirm:') ||
       interaction.customId.startsWith('security-cancel:')
@@ -1024,22 +1189,15 @@ client.on(
       return;
     }
 
-    if (
-      !canUseSecurityCommand(interaction)
-    ) {
+    if (!canUseSecurityCommand(interaction)) {
       return interaction.reply({
         content:
           '❌ معندكش صلاحية تستخدم أزرار الحماية.',
-
         flags: 64
       });
     }
 
-    const [
-      ,
-      action,
-      targetId
-    ] =
+    const [, action, targetId] =
       interaction.customId.split(':');
 
     /*
@@ -1062,46 +1220,29 @@ client.on(
         return interaction.reply({
           content:
             '❌ العضو غير موجود حاليًا في سيرفر الحماية.',
-
           flags: 64
         });
       }
 
       const roles =
         member.roles.cache
-
-          .filter(
-            r => r.id !== guild.id
-          )
-
+          .filter(r => r.id !== guild.id)
           .sort(
             (a, b) =>
               b.position - a.position
           )
-
-          .map(
-            r => r.name
-          )
-
+          .map(r => r.name)
           .slice(0, 20);
 
       const timeout =
         member.communicationDisabledUntilTimestamp >
         Date.now()
 
-          ? (
-            `<t:${
-              Math.floor(
-                member.communicationDisabledUntilTimestamp / 1000
-              )
-            }:F>\n` +
-
-            `(<t:${
-              Math.floor(
-                member.communicationDisabledUntilTimestamp / 1000
-              )
-            }:R>)`
-          )
+          ? `<t:${Math.floor(
+              member.communicationDisabledUntilTimestamp / 1000
+            )}:F>\n(<t:${Math.floor(
+              member.communicationDisabledUntilTimestamp / 1000
+            )}:R>)`
 
           : '✅ لا يوجد Timeout حاليًا';
 
@@ -1110,9 +1251,7 @@ client.on(
 
           .setColor(0x5865F2)
 
-          .setTitle(
-            '👤 USER INFO'
-          )
+          .setTitle('👤 USER INFO')
 
           .setThumbnail(
             member.user.displayAvatarURL({
@@ -1124,71 +1263,47 @@ client.on(
 
             {
               name: '👤 الاسم',
-
               value:
                 `${member.user}\n` +
                 `${member.user.tag || member.user.username}`,
-
               inline: true
             },
 
             {
               name: '🆔 User ID',
-
-              value:
-                `\`${member.id}\``,
-
+              value: `\`${member.id}\``,
               inline: true
             },
 
             {
               name: '🤖 النوع',
-
               value:
                 member.user.bot
                   ? 'Bot'
                   : 'User',
-
               inline: true
             },
 
             {
               name: '📅 إنشاء الحساب',
-
               value:
-                `<t:${
-                  Math.floor(
-                    member.user.createdTimestamp / 1000
-                  )
-                }:F>\n` +
-
-                `(<t:${
-                  Math.floor(
-                    member.user.createdTimestamp / 1000
-                  )
-                }:R>)`
+                `<t:${Math.floor(
+                  member.user.createdTimestamp / 1000
+                )}:F>\n` +
+                `(<t:${Math.floor(
+                  member.user.createdTimestamp / 1000
+                )}:R>)`
             },
 
             {
               name: '📥 دخول السيرفر',
-
               value:
                 member.joinedTimestamp
-
-                  ? (
-                    `<t:${
-                      Math.floor(
-                        member.joinedTimestamp / 1000
-                      )
-                    }:F>\n` +
-
-                    `(<t:${
-                      Math.floor(
-                        member.joinedTimestamp / 1000
-                      )
-                    }:R>)`
-                  )
-
+                  ? `<t:${Math.floor(
+                      member.joinedTimestamp / 1000
+                    )}:F>\n(<t:${Math.floor(
+                      member.joinedTimestamp / 1000
+                    )}:R>)`
                   : 'غير متاح'
             },
 
@@ -1200,12 +1315,9 @@ client.on(
             {
               name:
                 `🎭 Roles (${roles.length})`,
-
               value:
                 roles.length
-                  ? cut(
-                    roles.join('\n')
-                  )
+                  ? cut(roles.join('\n'))
                   : 'بدون رولات'
             }
           )
@@ -1231,36 +1343,26 @@ client.on(
 
       const messages =
         logChannel
-
           ? await logChannel.messages
-              .fetch({
-                limit: 100
-              })
+              .fetch({ limit: 100 })
               .catch(() => null)
-
           : null;
 
       const history =
         messages
-
           ? [...messages.values()]
-
               .filter(
                 message =>
-                  message.embeds.some(
-                    embed =>
-                      embed.fields?.some(
-                        field =>
-                          field.name === '👤 العضو' &&
-                          field.value.includes(
-                            `ID: \`${targetId}\``
-                          )
-                      )
-                  )
+                  getUserFromEmbed(
+                    message.embeds[0]
+                  ) === targetId
               )
-
+              .sort(
+                (a, b) =>
+                  b.createdTimestamp -
+                  a.createdTimestamp
+              )
               .slice(0, 10)
-
           : [];
 
       const embed =
@@ -1268,28 +1370,20 @@ client.on(
 
           .setColor(0x5865F2)
 
-          .setTitle(
-            '📜 SECURITY HISTORY'
-          )
+          .setTitle('📜 SECURITY HISTORY')
 
           .setDescription(
             history.length
-
               ? history
                   .map(
                     (message, index) =>
                       `**${index + 1}.** ` +
-
-                      `<t:${
-                        Math.floor(
-                          message.createdTimestamp / 1000
-                        )
-                      }:F> — ` +
-
+                      `<t:${Math.floor(
+                        message.createdTimestamp / 1000
+                      )}:F> — ` +
                       `[فتح الحالة](${message.url})`
                   )
                   .join('\n')
-
               : 'لا يوجد سجل حالات ظاهر لهذا العضو ضمن آخر 100 رسالة لوج.'
           )
 
@@ -1314,16 +1408,12 @@ client.on(
       unban: 'Un Ban'
     };
 
-    if (
-      !names[action] ||
-      !targetId
-    ) {
+    if (!names[action] || !targetId) {
       return;
     }
 
     const confirmRow =
       new ActionRowBuilder()
-
         .addComponents(
 
           new ButtonBuilder()
@@ -1346,15 +1436,11 @@ client.on(
 
         .setColor(0xFF9800)
 
-        .setTitle(
-          '⚠️ تأكيد العملية'
-        )
+        .setTitle('⚠️ تأكيد العملية')
 
         .setDescription(
           `هل أنت متأكد من تنفيذ **${names[action]}** على <@${targetId}>؟\n\n` +
-
           `**العملية:** ${action.toUpperCase()}\n` +
-
           `**العضو:** <@${targetId}>`
         )
 
@@ -1371,9 +1457,9 @@ client.on(
 );
 
 /*
-========================
+================================================
 CONFIRM ACTION
-========================
+================================================
 */
 
 client.on(
@@ -1390,13 +1476,10 @@ client.on(
       return;
     }
 
-    if (
-      !canUseSecurityCommand(interaction)
-    ) {
+    if (!canUseSecurityCommand(interaction)) {
       return interaction.reply({
         content:
           '❌ معندكش صلاحية تستخدم أزرار الحماية.',
-
         flags: 64
       });
     }
@@ -1413,19 +1496,19 @@ client.on(
     CANCEL
     */
 
-    if (
-      prefix === 'security-cancel'
-    ) {
+    if (prefix === 'security-cancel') {
+
+      const cancelEmbed =
+        new EmbedBuilder()
+          .setColor(0x757575)
+          .setTitle('↩️ تم إلغاء العملية')
+          .setDescription('لم يتم تنفيذ أي إجراء.')
+          .setTimestamp();
+
+      addFooter(cancelEmbed);
+
       return interaction.update({
-
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x757575)
-            .setTitle('↩️ تم إلغاء العملية')
-            .setDescription('لم يتم تنفيذ أي إجراء.')
-            .setTimestamp()
-        ],
-
+        embeds: [cancelEmbed],
         components: []
       });
     }
@@ -1505,7 +1588,6 @@ client.on(
         .setDescription(
           `**العملية:** ${names[action] || action}\n` +
           `**العضو:** <@${targetId}>\n\n` +
-
           (
             result.success
               ? 'تم إرسال سجل العملية إلى Admin User في الخاص.'
@@ -1518,7 +1600,7 @@ client.on(
     addFooter(resultEmbed);
 
     /*
-    تعديل الإمبيد الأساسي
+    تعديل الحالة اللي ضغطت منها الزر فقط
     */
 
     if (
@@ -1531,11 +1613,9 @@ client.on(
 
       const sourceMessage =
         logChannel
-
           ? await logChannel.messages
               .fetch(sourceMessageId)
               .catch(() => null)
-
           : null;
 
       if (
@@ -1548,151 +1628,91 @@ client.on(
             sourceMessage.embeds[0]
           );
 
-        /*
-        REVOKE
-        */
-
         if (action === 'revoke') {
 
           original
-
             .setColor(0x2E7D32)
-
-            .setTitle(
-              '🔄 TIMEOUT REVOKED'
-            )
-
+            .setTitle('🔄 TIMEOUT REVOKED')
             .setDescription(
               `**تم فك الـ Timeout باستخدام زر Revoke.**\n\n` +
-
               `👤 العضو: <@${targetId}>\n` +
-
               `🛡️ بواسطة: ${interaction.user}`
             )
-
             .setTimestamp();
 
           addFooter(original);
 
           await sourceMessage.edit({
-
             embeds: [original],
-
             components: [
               timeoutRemovedButtons(targetId)
             ]
-
           }).catch(() => {});
         }
-
-        /*
-        KICK
-        */
 
         if (action === 'kick') {
 
           original
-
             .setColor(0xFF9800)
-
-            .setTitle(
-              '🚫 SECURITY ACTION — KICK'
-            )
-
+            .setTitle('🚫 SECURITY ACTION — KICK')
             .setDescription(
               `**تم تنفيذ إجراء Kick على العضو.**\n\n` +
-
               `👤 العضو: <@${targetId}>\n` +
-
               `🛡️ بواسطة: ${interaction.user}`
             )
-
             .setTimestamp();
 
           addFooter(original);
 
           await sourceMessage.edit({
-
             embeds: [original],
-
             components: [
               afterKickButtons(targetId)
             ]
-
           }).catch(() => {});
         }
-
-        /*
-        BAN
-        */
 
         if (action === 'ban') {
 
           original
-
             .setColor(0xE53935)
-
-            .setTitle(
-              '⛔ SECURITY ACTION — BAN'
-            )
-
+            .setTitle('⛔ SECURITY ACTION — BAN')
             .setDescription(
               `**تم تنفيذ إجراء BAN على العضو.**\n\n` +
-
               `👤 العضو: <@${targetId}>\n` +
-
               `🛡️ بواسطة: ${interaction.user}`
             )
-
             .setTimestamp();
 
           addFooter(original);
 
           await sourceMessage.edit({
-
             embeds: [original],
-
             components: [
               afterBanButtons(targetId)
             ]
-
           }).catch(() => {});
         }
-
-        /*
-        UN BAN
-        */
 
         if (action === 'unban') {
 
           original
-
             .setColor(0x2E7D32)
-
-            .setTitle(
-              '🔓 SECURITY ACTION — UN BAN'
-            )
-
+            .setTitle('🔓 SECURITY ACTION — UN BAN')
             .setDescription(
               `**تم فك الحظر عن العضو بنجاح.**\n\n` +
-
               `👤 العضو: <@${targetId}>\n` +
-
               `🛡️ بواسطة: ${interaction.user}`
             )
-
             .setTimestamp();
 
           addFooter(original);
 
           await sourceMessage.edit({
-
             embeds: [original],
-
             components: [
               afterUnbanButtons(targetId)
             ]
-
           }).catch(() => {});
         }
       }
@@ -1706,9 +1726,9 @@ client.on(
 );
 
 /*
-========================
+================================================
 MESSAGE PROTECTION
-========================
+================================================
 */
 
 client.on(
@@ -1718,7 +1738,8 @@ client.on(
     if (
       !message.guild ||
       message.author.bot ||
-      message.channelId !== CONFIG.protectedChannelId
+      message.channelId !==
+        CONFIG.protectedChannelId
     ) {
       return;
     }
@@ -1727,10 +1748,8 @@ client.on(
       author: message.author,
       channel: message.channel,
       content: message.content,
-
       attachments:
         attachmentList(message),
-
       currentDeleted: false
     };
 
@@ -1740,11 +1759,8 @@ client.on(
       );
 
     try {
-
       await message.delete();
-
       data.currentDeleted = true;
-
     } catch {}
 
     await sendSecurityLog(
@@ -1756,15 +1772,10 @@ client.on(
 );
 
 /*
-========================
-MANUAL TIMEOUT REMOVE
-========================
-
-لو الـ Timeout اتفك يدويًا:
-يعدل الإمبيد فقط
-
-لو انتهت المدة:
-لا يعمل أي تعديل
+================================================
+TIMEOUT MANUAL REMOVAL
+أحدث حالة فقط
+================================================
 */
 
 client.on(
@@ -1791,7 +1802,7 @@ client.on(
 
       /*
       كان عليه Timeout
-      واتشال قبل ما وقته يخلص
+      واتشال يدوي قبل ما ينتهي
       */
 
       if (
@@ -1803,103 +1814,61 @@ client.on(
         )
       ) {
 
-        const logChannel =
-          await getLogChannel();
+        /*
+        أحدث حالة فقط
+        ولازم تكون أصلية
+        وفيها Revoke
+        */
 
-        if (!logChannel?.isTextBased()) {
+        const message =
+          await getLatestCaseMessage(
+            newMember.id,
+            msg =>
+              isOriginalSecurityCase(
+                msg,
+                newMember.id
+              ) &&
+              hasButton(
+                msg,
+                `security:revoke:${newMember.id}`
+              )
+          );
+
+        if (!message) {
           return;
         }
 
-        const messages =
-          await logChannel.messages
-            .fetch({
-              limit: 100
-            })
-            .catch(() => null);
+        const newEmbed =
+          EmbedBuilder.from(
+            message.embeds[0]
+          );
 
-        if (!messages) {
-          return;
-        }
+        newEmbed
+          .setColor(0x5865F2)
+          .setTitle(
+            '🔄 TIMEOUT REMOVED MANUALLY'
+          )
+          .setDescription(
+            `**تم فك الـ Timeout يدويًا بواسطة الإدارة.**\n\n` +
+            `👤 العضو: <@${newMember.id}>`
+          )
+          .setTimestamp();
 
-        const userId =
-          newMember.id;
+        addFooter(newEmbed);
 
-        for (
-          const message
-          of messages.values()
-        ) {
+        await message.edit({
+          embeds: [newEmbed],
+          components: [
+            timeoutRemovedButtons(newMember.id)
+          ]
+        }).catch(() => {});
 
-          if (
-            !message.embeds.length
-          ) {
-            continue;
-          }
-
-          const embed =
-            message.embeds[0];
-
-          const userField =
-            embed.fields?.find(
-              field =>
-                field.name === '👤 العضو' &&
-                field.value.includes(
-                  `ID: \`${userId}\``
-                )
-            );
-
-          if (!userField) {
-            continue;
-          }
-
-          const hasRevoke =
-            message.components.some(
-              row =>
-                row.components.some(
-                  button =>
-                    button.customId ===
-                    `security:revoke:${userId}`
-                )
-            );
-
-          if (!hasRevoke) {
-            continue;
-          }
-
-          const newEmbed =
-            EmbedBuilder.from(embed);
-
-          newEmbed
-
-            .setColor(0x5865F2)
-
-            .setTitle(
-              '🔄 TIMEOUT REMOVED MANUALLY'
-            )
-
-            .setDescription(
-              `**تم فك الـ Timeout يدويًا بواسطة الإدارة.**\n\n` +
-
-              `👤 العضو: <@${userId}>`
-            )
-
-            .setTimestamp();
-
-          addFooter(newEmbed);
-
-          await message.edit({
-
-            embeds: [newEmbed],
-
-            components: [
-              timeoutRemovedButtons(userId)
-            ]
-
-          }).catch(() => {});
-        }
+        console.log(
+          `🔄 Manual Timeout Remove: ${newMember.id}`
+        );
       }
 
     } catch (error) {
-
       console.error(
         '[Timeout Monitor]',
         error
@@ -1909,9 +1878,608 @@ client.on(
 );
 
 /*
-========================
+================================================
+TIMEOUT EXPIRATION CHECKER
+أحدث حالة فقط
+كل 15 ثانية
+================================================
+*/
+
+setInterval(
+  async () => {
+
+    try {
+
+      const protectedGuild =
+        await getProtectedGuild();
+
+      if (!protectedGuild) {
+        return;
+      }
+
+      const logChannel =
+        await getLogChannel();
+
+      if (!logChannel?.isTextBased()) {
+        return;
+      }
+
+      const messages =
+        await logChannel.messages
+          .fetch({ limit: 100 })
+          .catch(() => null);
+
+      if (!messages) {
+        return;
+      }
+
+      /*
+      نجيب كل User IDs
+      */
+
+      const userIds =
+        new Set();
+
+      for (
+        const message
+        of messages.values()
+      ) {
+
+        if (!message.embeds.length) {
+          continue;
+        }
+
+        const userId =
+          getUserFromEmbed(
+            message.embeds[0]
+          );
+
+        if (userId) {
+          userIds.add(userId);
+        }
+      }
+
+      /*
+      لكل عضو:
+      نفحص أحدث حالة فقط
+      */
+
+      for (
+        const userId
+        of userIds
+      ) {
+
+        const message =
+          await getLatestCaseMessage(
+            userId,
+            msg =>
+              isOriginalSecurityCase(
+                msg,
+                userId
+              ) &&
+              hasButton(
+                msg,
+                `security:revoke:${userId}`
+              )
+          );
+
+        if (!message) {
+          continue;
+        }
+
+        const member =
+          await protectedGuild.members
+            .fetch(userId)
+            .catch(() => null);
+
+        if (!member) {
+          continue;
+        }
+
+        const timeoutUntil =
+          member.communicationDisabledUntilTimestamp;
+
+        /*
+        Timeout لسه شغال
+        */
+
+        if (
+          timeoutUntil &&
+          timeoutUntil > Date.now()
+        ) {
+          continue;
+        }
+
+        /*
+        نتأكد إن دي لسه أحدث حالة
+        */
+
+        const freshMessage =
+          await getLatestCaseMessage(
+            userId,
+            msg =>
+              msg.id === message.id &&
+              isOriginalSecurityCase(
+                msg,
+                userId
+              ) &&
+              hasButton(
+                msg,
+                `security:revoke:${userId}`
+              )
+          );
+
+        if (!freshMessage) {
+          continue;
+        }
+
+        const newEmbed =
+          EmbedBuilder.from(
+            freshMessage.embeds[0]
+          );
+
+        /*
+        اللون الرصاصي
+        */
+
+        newEmbed
+          .setColor(0x757575)
+          .setTitle(
+            '⏱️ TIMEOUT EXPIRED'
+          )
+          .setDescription(
+            `**تم انتهاء مدة الـ Timeout الخاصة بالعضو.**\n\n` +
+            `👤 العضو: <@${userId}>\n\n` +
+            'لم يتم تنفيذ أي إجراء إضافي.'
+          )
+          .setTimestamp();
+
+        addFooter(newEmbed);
+
+        await freshMessage.edit({
+          embeds: [newEmbed],
+          components: [
+            timeoutRemovedButtons(userId)
+          ]
+        }).catch(() => {});
+
+        console.log(
+          `⏱️ Timeout expired for ${userId}`
+        );
+      }
+
+    } catch (error) {
+      console.error(
+        '[Timeout Expiration Checker]',
+        error
+      );
+    }
+
+  },
+  15000
+);
+
+/*
+================================================
+GET KICK EXECUTOR
+================================================
+*/
+
+async function getKickExecutor(
+  guild,
+  userId
+) {
+  try {
+
+    await new Promise(
+      resolve =>
+        setTimeout(resolve, 1200)
+    );
+
+    const logs =
+      await guild.fetchAuditLogs({
+        type: AuditLogEvent.MemberKick,
+        limit: 10
+      });
+
+    const entry =
+      logs.entries.find(
+        log =>
+          log.target?.id === userId &&
+          Date.now() -
+            log.createdTimestamp <
+            15000
+      );
+
+    return entry?.executor || null;
+
+  } catch (error) {
+
+    console.error(
+      '[Kick Audit Log]',
+      error.message
+    );
+
+    return null;
+  }
+}
+
+/*
+================================================
+GET BAN EXECUTOR
+================================================
+*/
+
+async function getBanExecutor(guild, userId) {
+  try {
+
+    // نستنى الـ Audit Log يتسجل
+    await new Promise(resolve => setTimeout(resolve, 2500));
+
+    const logs = await guild.fetchAuditLogs({
+      type: AuditLogEvent.MemberBanAdd,
+      limit: 20
+    });
+
+    const entry = logs.entries.find(log =>
+      log.target?.id === userId &&
+      Date.now() - log.createdTimestamp < 30000
+    );
+
+    if (!entry) {
+      console.log(`⚠️ لم يتم العثور على Audit Log للـ Ban: ${userId}`);
+      return null;
+    }
+
+    console.log(
+      `⛔ Ban Audit Found: ${userId} بواسطة ${entry.executor?.tag}`
+    );
+
+    return entry.executor || null;
+
+  } catch (error) {
+
+    console.error(
+      '[Ban Audit Log Error]',
+      error
+    );
+
+    return null;
+  }
+}
+
+/*
+================================================
+MANUAL KICK DETECTOR
+
+أحدث حالة فقط
+مش كل الحالات القديمة
+================================================
+*/
+
+client.on(
+  Events.GuildMemberRemove,
+  async member => {
+
+    try {
+
+      const protectedGuild =
+        await getProtectedGuild();
+
+      if (
+        !protectedGuild ||
+        member.guild.id !== protectedGuild.id
+      ) {
+        return;
+      }
+
+      const userId = member.id;
+
+      /*
+      لو البوت هو اللي عمل Kick
+      */
+
+      if (
+        isBotAction(
+          'kick',
+          userId
+        )
+      ) {
+        return;
+      }
+
+      const executor =
+        await getKickExecutor(
+          member.guild,
+          userId
+        );
+
+      /*
+      Leave عادي
+      */
+
+      if (!executor) {
+        return;
+      }
+
+      /*
+      نجيب أحدث حالة فقط
+      ولازم فيها Kick
+      ومش حالة Ban
+      */
+
+      const message =
+        await getLatestCaseMessage(
+          userId,
+          msg =>
+            hasButton(
+              msg,
+              `security:kick:${userId}`
+            ) &&
+            !hasButton(
+              msg,
+              `security:unban:${userId}`
+            )
+        );
+
+      if (!message) {
+        return;
+      }
+
+      const newEmbed =
+        EmbedBuilder.from(
+          message.embeds[0]
+        );
+
+      newEmbed
+        .setColor(0xFF9800)
+        .setTitle(
+          '🚫 SECURITY ACTION — MANUAL KICK'
+        )
+        .setDescription(
+          `**تم طرد العضو يدويًا بواسطة الإدارة.**\n\n` +
+          `👤 العضو: <@${userId}>\n` +
+          `🛡️ بواسطة: ${executor}`
+        )
+        .setTimestamp();
+
+      addFooter(newEmbed);
+
+      await message.edit({
+        embeds: [newEmbed],
+        components: [
+          afterKickButtons(userId)
+        ]
+      }).catch(() => {});
+
+      console.log(
+        `🚫 Manual Kick detected: ${userId} بواسطة ${executor.tag}`
+      );
+
+    } catch (error) {
+      console.error(
+        '[Manual Kick Detector]',
+        error
+      );
+    }
+  }
+);
+
+/*
+================================================
+MANUAL BAN DETECTOR
+
+أحدث حالة فقط
+================================================
+*/
+
+/*
+================================================
+MANUAL BAN DETECTOR
+================================================
+*/
+
+client.on(Events.GuildBanAdd, async ban => {
+
+  console.log('🔥 BAN EVENT FIRED!');
+  console.log('User:', ban.user.id);
+  console.log('Guild:', ban.guild.id);
+
+  try {
+
+    const protectedGuild = await getProtectedGuild();
+
+    if (
+      !protectedGuild ||
+      ban.guild.id !== protectedGuild.id
+    ) {
+      return;
+    }
+
+    const userId = ban.user.id;
+
+    console.log(
+      `⛔ GuildBanAdd detected for: ${userId}`
+    );
+
+    /*
+    لو البوت هو اللي عمل البان
+    */
+    if (isBotAction('ban', userId)) {
+
+      console.log(
+        `🤖 Bot Ban ignored: ${userId}`
+      );
+
+      return;
+    }
+
+    /*
+    نجيب الأدمن من Audit Log
+    */
+    const executor =
+      await getBanExecutor(
+        ban.guild,
+        userId
+      );
+
+    console.log(
+      `🔍 Ban executor: ${
+        executor?.tag || 'Unknown / Manual'
+      }`
+    );
+
+    const logChannel =
+      await getLogChannel();
+
+    if (!logChannel?.isTextBased()) {
+      console.log(
+        '❌ Log channel not found'
+      );
+
+      return;
+    }
+
+    const messages =
+      await logChannel.messages.fetch({
+        limit: 100
+      }).catch(error => {
+
+        console.error(
+          '❌ Failed to fetch log messages:',
+          error
+        );
+
+        return null;
+      });
+
+    if (!messages) {
+      return;
+    }
+
+    /*
+    نجيب حالات العضو فقط
+    */
+
+    const userCases =
+      [...messages.values()]
+        .filter(message => {
+
+          if (!message.embeds.length) {
+            return false;
+          }
+
+          return (
+            getUserFromEmbed(
+              message.embeds[0]
+            ) === userId
+          );
+
+        })
+
+        /*
+        الأحدث الأول
+        */
+        .sort(
+          (a, b) =>
+            b.createdTimestamp -
+            a.createdTimestamp
+        );
+
+    console.log(
+      `📋 Found ${userCases.length} cases for ${userId}`
+    );
+
+    /*
+    لو مفيش حالات
+    */
+    if (!userCases.length) {
+      return;
+    }
+
+    /*
+    نعدل أحدث حالة فقط
+    */
+    const message =
+      userCases[0];
+
+    /*
+    لو الحالة بالفعل Ban
+    متعدلهاش
+    */
+
+    if (
+      hasButton(
+        message,
+        `security:unban:${userId}`
+      )
+    ) {
+
+      console.log(
+        '⚠️ Latest case already banned'
+      );
+
+      return;
+    }
+
+    const newEmbed =
+      EmbedBuilder.from(
+        message.embeds[0]
+      );
+
+    newEmbed
+
+      .setColor(0xE53935)
+
+      .setTitle(
+        '⛔ SECURITY ACTION — MANUAL BAN'
+      )
+
+      .setDescription(
+        `**تم حظر العضو يدويًا بواسطة الإدارة.**\n\n` +
+
+        `👤 العضو: <@${userId}>\n` +
+
+        (
+          executor
+            ? `🛡️ بواسطة: ${executor}`
+            : '🛡️ بواسطة: الإدارة'
+        )
+      )
+
+      .setTimestamp();
+
+    addFooter(newEmbed);
+
+    await message.edit({
+
+      embeds: [newEmbed],
+
+      components: [
+        afterBanButtons(userId)
+      ]
+
+    });
+
+    console.log(
+      `✅ Manual Ban embed updated for ${userId}`
+    );
+
+  } catch (error) {
+
+    console.error(
+      '[Manual Ban Detector Error]',
+      error
+    );
+
+  }
+
+});
+
+/*
+================================================
 ERRORS
-========================
+================================================
 */
 
 client.on(
@@ -1931,5 +2499,20 @@ process.on(
       error
     )
 );
+
+process.on(
+  'uncaughtException',
+  error =>
+    console.error(
+      '[Uncaught Exception]',
+      error
+    )
+);
+
+/*
+================================================
+LOGIN
+================================================
+*/
 
 client.login(CONFIG.token);
