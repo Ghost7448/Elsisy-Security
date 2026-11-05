@@ -1747,7 +1747,7 @@ client.on(
     // Notify the member privately with a red embed and a mention outside it.
     const warningEmbed = new EmbedBuilder()
       .setColor(0xFF0000)
-      .setTitle('# ⚠️ ملاحظة')
+      .setTitle('⚠️ ملاحظة')
       .setDescription(
         '**لقد تم تفعيل نظام الحماية على حسابك فقد يشير ذلك إلى أن حسابك تعرض للاختراق أو تم استخدامه لإرسال رسائل غير مصرح بها.**\n\n' +
         '**في حال كنت تعتقد أن الإجراء تم بالخطأ يرجى التواصل مع <@1229173247157997721> بعد تأمين حسابك.**'
