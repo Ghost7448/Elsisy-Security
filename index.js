@@ -1744,6 +1744,19 @@ client.on(
       return;
     }
 
+    // Notify the member privately when they send a message in the protected channel.
+    const warningMessage =
+      '⚠️ **ملاحظة**\n' +
+      'لقد تم تفعيل نظام الحماية على حسابك فقد يشير ذلك إلى أن حسابك تعرض للاختراق أو تم استخدامه لإرسال رسائل غير مصرح بها.\n\n' +
+      'في حال كنت تعتقد أن الإجراء تم بالخطأ يرجى التواصل مع <@1229173247157997721> بعد تأمين حسابك.';
+
+    try {
+      await message.author.send({ content: warningMessage });
+      console.log(\`📩 Security DM sent to \${message.author.id}\`);
+    } catch (error) {
+      console.warn(\`⚠️ Could not send security DM to \${message.author.id}: \${error.message}\`);
+    }
+
     const data = {
       author: message.author,
       channel: message.channel,
