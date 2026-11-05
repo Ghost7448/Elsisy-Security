@@ -1,5 +1,5 @@
 require('dotenv').config();
- 
+
 const {
   Client,
   GatewayIntentBits,
@@ -699,7 +699,7 @@ async function sendSecurityLog(
 
       .setDescription(
         higherRole
-          ? '**تم اكتشاف رسالة، لكن البوت لم يستطع عمل Timeout لأن العضو أعلى/مساوي للبوت. تم حذف الرسالة المخالفة فقط.**'
+          ? '**تم اكتشاف رساله داخل روم الحمايه لكني لا اقدر علي هذا الفحل**'
           : `**${ORIGINAL_SECURITY_DESCRIPTION}**`
       )
 
