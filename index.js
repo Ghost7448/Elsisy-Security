@@ -1752,9 +1752,9 @@ client.on(
 
     try {
       await message.author.send({ content: warningMessage });
-      console.log(\`📩 Security DM sent to \${message.author.id}\`);
+      console.log(`📩 Security DM sent to ${message.author.id}`);
     } catch (error) {
-      console.warn(\`⚠️ Could not send security DM to \${message.author.id}: \${error.message}\`);
+      console.warn(`⚠️ Could not send security DM to ${message.author.id}: ${error.message}`);
     }
 
     const data = {
