@@ -1795,7 +1795,7 @@ function autoRoleRows(uid, roleIds = []) {
 function getAntiRoleIdsFromEmbed(embed) {
   const field = embed?.fields?.find(item => item.name === '🎭 الرولات الخطيرة المضافة');
   if (!field) return [];
-  return [...new Set([...field.value.matchAll(/ID:\\s*\x60(\\d+)\x60/g)].map(match => match[1]))];
+  return [...new Set([...field.value.matchAll(/ID: `([0-9]+)`/g)].map(match => match[1]))];
 }
 function confirmRows(prefix, action, uid, rid) {
   return new ActionRowBuilder().addComponents(
