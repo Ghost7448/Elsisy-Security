@@ -1764,20 +1764,20 @@ function antiBotRows(id) {
     new ButtonBuilder().setCustomId('antibot:info:' + id).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
   );
 }
-function autoRoleRows(uid, roleIds = []) {
+function autoRoleRows(uid, roleIds = [], originalRoleIds = roleIds) {
   const buttons = [
     new ButtonBuilder().setCustomId('autorole:info:' + uid).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary),
-    ...roleIds.slice(0, 23).map((rid, index) =>
+    ...roleIds.slice(0, 23).map(rid =>
       new ButtonBuilder()
         .setCustomId('autorole:remove:' + uid + ':' + rid)
-        .setLabel('Remove ' + (index + 1))
+        .setLabel('Remove ' + (originalRoleIds.indexOf(rid) + 1))
         .setEmoji('🗑️')
         .setStyle(ButtonStyle.Danger)
     )
   ];
 
-  // Show Remove All only while at least two alerted roles remain.
-  if (roleIds.length > 1) {
+  // Keep Remove All available as long as at least one alerted role remains.
+  if (roleIds.length > 0) {
     buttons.push(
       new ButtonBuilder()
         .setCustomId('autorole:removeall:' + uid)
@@ -2091,7 +2091,7 @@ client.on(Events.InteractionCreate, async i => {
     const remainingRoleIds = getAntiRoleIdsFromEmbed(original).filter(rid =>
       latestMember?.roles.cache.has(rid)
     );
-    rows = autoRoleRows(targetId, remainingRoleIds);
+    rows = autoRoleRows(targetId, remainingRoleIds, getAntiRoleIdsFromEmbed(original));
   } else if(operation === 'kick' || operation === 'ban') {
     // Once removed from the guild, Bot Info is no longer actionable.
     rows = [];
