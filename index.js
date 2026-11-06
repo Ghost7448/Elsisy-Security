@@ -1824,63 +1824,101 @@ client.on(Events.GuildMemberAdd, async member => {
     addFooter(e); await ch.send({embeds:[e],components:[antiBotRows(member.id)]});
   } catch(e){console.error('[Anti Bot Join]',e);}
 });
-client.on(Events.GuildMemberUpdate, async (oldM,newM) => {
-  try {
-    const pg=await getProtectedGuild();
-    if(!pg || newM.guild.id!==pg.id) return;
-    const added=newM.roles.cache.filter(r=>!oldM.roles.cache.has(r.id) && (r.permissions.has(PermissionsBitField.Flags.Administrator)||r.permissions.has(PermissionsBitField.Flags.ManageRoles)));
-    if(!added.size)return;
-    const ch=await dedicatedLog(CONFIG.autoRoleLogChannelId);
-    if(!ch){console.error('[Anti Role] Missing AUTO_ROLE_LOG_CHANNEL_ID channel');return;}
-    const actor=await securityAuditActor(newM.guild,AuditLogEvent.MemberRoleUpdate,newM.id);
-    for(const role of added.values()){
-      const perms = role.permissions.has(PermissionsBitField.Flags.Administrator)
-        ? ['Administrator']
-        : role.permissions.has(PermissionsBitField.Flags.ManageRoles)
-          ? ['Manage Roles']
-          : [];
-      const e=new EmbedBuilder().setColor(0xE53935).setTitle('⚠️ ANTI ROLE — DANGEROUS ROLE ASSIGNED')
-        .setDescription('تم اكتشاف إعطاء عضو Role تحتوي على صلاحيات إدارية حساسة.')
-        .addFields(
-          {name:'👤 العضو',value:newM.user.toString()+'\n'+(newM.user.tag||newM.user.username)+'\nID: '+newM.id},
-          {name:'🎭 الرول المضافة',value:role.toString()+'\n'+role.name+'\nID: '+role.id},
-          {name:'🔐 الصلاحيات الخطيرة',value:perms.join('\n')},
-          {name:'👮 بواسطة',value:actor?actor.toString()+'\nID: '+actor.id:'غير متاح من Audit Logs'}
-        ).setThumbnail(newM.user.displayAvatarURL({size:256})).setTimestamp();
-      addFooter(e); await ch.send({embeds:[e],components:[autoRoleRows(newM.id,role.id)]});
-    }
-  }catch(e){console.error('[Anti Role]',e);}
-});
-
-// Detect manual removal of a monitored dangerous role.
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   try {
     const pg = await getProtectedGuild();
     if (!pg || newMember.guild.id !== pg.id) return;
-    const removed = oldMember.roles.cache.filter(r =>
-      !newMember.roles.cache.has(r.id) &&
-      (r.permissions.has(PermissionsBitField.Flags.Administrator) ||
-       r.permissions.has(PermissionsBitField.Flags.ManageRoles))
+
+    // Wait for Discord's audit log entry so we can use its exact $add/$remove role list.
+    await new Promise(resolve => setTimeout(resolve, 1400));
+    const auditLogs = await newMember.guild.fetchAuditLogs({
+      type: AuditLogEvent.MemberRoleUpdate,
+      limit: 20
+    }).catch(() => null);
+    const auditEntry = auditLogs?.entries.find(entry =>
+      entry.target?.id === newMember.id &&
+      Date.now() - entry.createdTimestamp < 15000
     );
-    if (!removed.size) return;
-    const ch = await dedicatedLog(CONFIG.autoRoleLogChannelId);
-    if (!ch) return;
-    for (const role of removed.values()) {
+
+    const auditAdds = auditEntry?.changes?.find(change => change.key === '$add')?.new;
+    const auditRemoves = auditEntry?.changes?.find(change => change.key === '$remove')?.new;
+
+    // Prefer the exact role IDs recorded by Discord's audit log. This avoids treating
+    // roles already on the member as newly assigned during another role update.
+    const addedIds = Array.isArray(auditAdds)
+      ? new Set(auditAdds.map(role => role.id))
+      : new Set(newMember.roles.cache
+          .filter(role => !oldMember.roles.cache.has(role.id))
+          .map(role => role.id));
+    const removedIds = Array.isArray(auditRemoves)
+      ? new Set(auditRemoves.map(role => role.id))
+      : new Set(oldMember.roles.cache
+          .filter(role => !newMember.roles.cache.has(role.id))
+          .map(role => role.id));
+
+    const dangerous = role =>
+      role.permissions.has(PermissionsBitField.Flags.Administrator) ||
+      role.permissions.has(PermissionsBitField.Flags.ManageRoles);
+
+    const addedRoles = [...addedIds]
+      .map(id => newMember.guild.roles.cache.get(id))
+      .filter(role => role && dangerous(role));
+
+    const removedRoles = [...removedIds]
+      .map(id => oldMember.guild.roles.cache.get(id) || oldMember.roles.cache.get(id))
+      .filter(role => role && dangerous(role));
+
+    const actor = auditEntry?.executor || null;
+    const logChannel = await dedicatedLog(CONFIG.autoRoleLogChannelId);
+    if (!logChannel) {
+      if (addedRoles.length || removedRoles.length) {
+        console.error('[Anti Role] Missing AUTO_ROLE_LOG_CHANNEL_ID channel');
+      }
+      return;
+    }
+
+    // Only report roles that Discord says were added in this specific update.
+    for (const role of addedRoles) {
+      const permission = role.permissions.has(PermissionsBitField.Flags.Administrator)
+        ? 'Administrator'
+        : 'Manage Roles';
+
+      const embed = new EmbedBuilder()
+        .setColor(0xE53935)
+        .setTitle('⚠️ ANTI ROLE — DANGEROUS ROLE ASSIGNED')
+        .setDescription('تم رصد إضافة الرول الخطيرة التالية فقط في هذا التغيير.')
+        .addFields(
+          { name: '👤 العضو', value: newMember.user.toString() + '\n' + (newMember.user.tag || newMember.user.username) + '\nID: ' + newMember.id },
+          { name: '🎭 الرول المضافة', value: role.toString() + '\n' + role.name + '\nID: ' + role.id },
+          { name: '🔐 الصلاحية الخطيرة', value: permission },
+          { name: '👮 بواسطة', value: actor ? actor.toString() + '\nID: ' + actor.id : 'غير متاح من Audit Logs' }
+        )
+        .setThumbnail(newMember.user.displayAvatarURL({ size: 256 }))
+        .setTimestamp();
+      addFooter(embed);
+      await logChannel.send({ embeds: [embed], components: [autoRoleRows(newMember.id, role.id)] });
+    }
+
+    // If a monitored role was removed manually, update only the matching alert.
+    for (const role of removedRoles) {
       const customId = 'autorole:remove:' + newMember.id + ':' + role.id;
-      const msg = await findDedicatedLogMessage(ch, customId);
-      if (!msg) continue;
-      const actor = await securityAuditActor(newMember.guild, AuditLogEvent.MemberRoleUpdate, newMember.id);
-      const perms = role.permissions.has(PermissionsBitField.Flags.Administrator)
+      const message = await findDedicatedLogMessage(logChannel, customId);
+      if (!message) continue;
+
+      const permission = role.permissions.has(PermissionsBitField.Flags.Administrator)
         ? 'Administrator'
         : 'Manage Roles';
       await updateDedicatedStatus(
-        msg,
-        '✅ ANTI ROLE — ROLE REMOVED',
-        'تمت إزالة الرول الخطيرة من العضو.\n\n🎯 العضو: <@' + newMember.id + '>\n🎭 الرول: ' + role.name +
-        '\n🔐 الصلاحية: ' + perms + '\n🛡️ تمت الإزالة بواسطة: ' + (actor ? actor.toString() : 'غير متاح من Audit Logs')
-      , 0x2E7D32);
+        message,
+        '✅ ANTI ROLE — REMOVED BY ADMINISTRATION',
+        'تمت إزالة الرول يدويًا بواسطة الإدارة.\n\n🎯 العضو: <@' + newMember.id + '>\n🎭 الرول: ' + role.name +
+          '\n🔐 الصلاحية: ' + permission + '\n👮 بواسطة: ' + (actor ? actor.toString() : 'غير متاح من Audit Logs'),
+        0x2E7D32
+      );
     }
-  } catch (e) { console.error('[Anti Role Manual Removal]', e); }
+  } catch (error) {
+    console.error('[Anti Role Update]', error);
+  }
 });
 
 // Detect manual kicks and bans of bots and update their original Anti Bot log.
@@ -1963,10 +2001,17 @@ client.on(Events.InteractionCreate, async i => {
       if(!me)throw new Error('تعذر تحديد أعلى رول للبوت.');
       const removable = freshMember.roles.cache.filter(r => r.id !== guild.id && !r.managed && r.position < me.roles.highest.position);
       const skipped = freshMember.roles.cache.filter(r => r.id !== guild.id && (r.managed || r.position >= me.roles.highest.position));
-      if(removable.size) await freshMember.roles.remove(removable.map(r => r.id), 'Anti Bot remove roles by '+i.user.tag);
+      if(removable.size) {
+        await freshMember.roles.remove(removable.map(r => r.id), 'Anti Bot remove roles by '+i.user.tag);
+      }
       const verified = await guild.members.fetch(targetId);
       const remaining = verified.roles.cache.filter(r => r.id !== guild.id);
-      detail='تمت إزالة '+removable.size+' رول. الرولات/الصلاحيات المتبقية بسبب Managed أو ترتيب الرولات: '+skipped.size+'. الرولات المتبقية فعليًا: '+remaining.size+'.'; ok=true;
+      const managedRoles = remaining.filter(r => r.managed);
+      detail = 'تمت إزالة '+removable.size+' رول قابلة للإزالة. الرولات المتبقية: '+remaining.size+
+        '. الرولات Managed/الأعلى من رتبة البوت: '+skipped.size+
+        (managedRoles.size ? '. رول البوت المُدارة من Discord لا يمكن تعديل صلاحياتها أو حذفها عبر البوت.' : '')+
+        '. الرولات المتبقية فعليًا: '+remaining.map(r => r.name).join('، ');
+      ok=true;
     }
   }catch(e){detail=e.message||'حدث خطأ غير معروف.';}
   const name=operation==='remove'?'REMOVE ROLE':operation.toUpperCase();
