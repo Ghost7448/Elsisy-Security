@@ -1760,7 +1760,6 @@ function antiBotRows(id) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('antibot:kick:' + id).setLabel('Kick').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('antibot:ban:' + id).setLabel('Ban').setEmoji('⛔').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('antibot:roles:' + id).setLabel('Remove All Roles').setEmoji('🧹').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('antibot:info:' + id).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
   );
 }
@@ -1804,7 +1803,26 @@ async function updateDedicatedStatus(message, title, description, color = 0x7575
   const embed = EmbedBuilder.from(message.embeds[0])
     .setColor(color).setTitle(title).setDescription(description).setTimestamp();
   addFooter(embed);
-  await message.edit({embeds:[embed],components:[]}).catch(() => {});
+
+  // Keep the relevant info button on the log forever, even after status changes.
+  const infoButton = message.components
+    .flatMap(row => row.components)
+    .find(button =>
+      button.customId?.startsWith('autorole:info:') ||
+      button.customId?.startsWith('antibot:info:')
+    );
+
+  const components = infoButton
+    ? [new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(infoButton.customId)
+          .setLabel(infoButton.label || (infoButton.customId.startsWith('antibot:') ? 'Bot Info' : 'User Info'))
+          .setEmoji(infoButton.emoji?.name || (infoButton.customId.startsWith('antibot:') ? '🤖' : '🪪'))
+          .setStyle(ButtonStyle.Secondary)
+      )]
+    : [];
+
+  await message.edit({embeds:[embed],components}).catch(() => {});
 }
 
 client.on(Events.GuildMemberAdd, async member => {
@@ -1829,32 +1847,37 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const pg = await getProtectedGuild();
     if (!pg || newMember.guild.id !== pg.id) return;
 
-    // Wait for Discord's audit log entry so we can use its exact $add/$remove role list.
+    // The member snapshots are the source of truth: only IDs that actually changed
+    // in this Gateway event are considered. Audit-log $add/$remove can describe a
+    // different nearby update and must never cause old roles to be reported again.
+    const addedIds = new Set(newMember.roles.cache
+      .filter(role => !oldMember.roles.cache.has(role.id))
+      .map(role => role.id));
+    const removedIds = new Set(oldMember.roles.cache
+      .filter(role => !newMember.roles.cache.has(role.id))
+      .map(role => role.id));
+
     await new Promise(resolve => setTimeout(resolve, 1400));
     const auditLogs = await newMember.guild.fetchAuditLogs({
       type: AuditLogEvent.MemberRoleUpdate,
       limit: 20
     }).catch(() => null);
-    const auditEntry = auditLogs?.entries.find(entry =>
-      entry.target?.id === newMember.id &&
-      Date.now() - entry.createdTimestamp < 15000
-    );
+    const auditCandidates = [...(auditLogs?.entries.values() || [])]
+      .filter(entry =>
+        entry.target?.id === newMember.id &&
+        Date.now() - entry.createdTimestamp < 15000
+      )
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
-    const auditAdds = auditEntry?.changes?.find(change => change.key === '$add')?.new;
-    const auditRemoves = auditEntry?.changes?.find(change => change.key === '$remove')?.new;
-
-    // Prefer the exact role IDs recorded by Discord's audit log. This avoids treating
-    // roles already on the member as newly assigned during another role update.
-    const addedIds = Array.isArray(auditAdds)
-      ? new Set(auditAdds.map(role => role.id))
-      : new Set(newMember.roles.cache
-          .filter(role => !oldMember.roles.cache.has(role.id))
-          .map(role => role.id));
-    const removedIds = Array.isArray(auditRemoves)
-      ? new Set(auditRemoves.map(role => role.id))
-      : new Set(oldMember.roles.cache
-          .filter(role => !newMember.roles.cache.has(role.id))
-          .map(role => role.id));
+    const auditEntry = auditCandidates.find(entry => {
+      const adds = entry.changes?.find(change => change.key === '$add')?.new;
+      const removes = entry.changes?.find(change => change.key === '$remove')?.new;
+      const addIds = new Set(Array.isArray(adds) ? adds.map(role => role.id) : []);
+      const removeIds = new Set(Array.isArray(removes) ? removes.map(role => role.id) : []);
+      const addMatch = [...addedIds].some(id => addIds.has(id));
+      const removeMatch = [...removedIds].some(id => removeIds.has(id));
+      return addMatch || removeMatch;
+    }) || auditCandidates[0] || null;
 
     const dangerous = role =>
       role.permissions.has(PermissionsBitField.Flags.Administrator) ||
@@ -2020,13 +2043,22 @@ client.on(Events.InteractionCreate, async i => {
     .setDescription((ok?'تم تنفيذ الإجراء بنجاح.':'تعذر تنفيذ الإجراء.')+'\n\n🎯 الهدف: <@'+targetId+'>\n🛡️ بواسطة: '+i.user.toString()+'\n\n'+cut(detail)).setTimestamp();
   addFooter(status);
   let rows=[];
-  if(!ok)rows=operation==='remove'?[autoRoleRows(targetId,targetRole)]:[antiBotRows(targetId)];
-  else if(operation==='remove')rows=[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('autorole:info:'+targetId+':'+targetRole).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary))];
-  else if(operation==='roles')rows=[new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('antibot:kick:'+targetId).setLabel('Kick').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('antibot:ban:'+targetId).setLabel('Ban').setEmoji('⛔').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('antibot:info:'+targetId).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
-  )];
+  if(!ok) {
+    rows = operation === 'remove'
+      ? [autoRoleRows(targetId,targetRole)]
+      : [antiBotRows(targetId)];
+  } else if(operation === 'remove') {
+    rows = [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('autorole:info:'+targetId+':'+targetRole)
+        .setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary)
+    )];
+  } else {
+    // Keep Bot Info visible after every completed Anti Bot action.
+    rows = [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('antibot:info:'+targetId)
+        .setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
+    )];
+  }
   await i.message.edit({embeds:[status],components:rows}).catch(()=>{});
   await antiAdminDM(name,targetId,i.user,ok,detail);
   if(!ok)await i.followUp({content:'❌ '+cut(detail),flags:64}).catch(()=>{});
