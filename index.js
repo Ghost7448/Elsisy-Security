@@ -1847,49 +1847,53 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const pg = await getProtectedGuild();
     if (!pg || newMember.guild.id !== pg.id) return;
 
-    // The member snapshots are the source of truth: only IDs that actually changed
-    // in this Gateway event are considered. Audit-log $add/$remove can describe a
-    // different nearby update and must never cause old roles to be reported again.
-    const addedIds = new Set(newMember.roles.cache
-      .filter(role => !oldMember.roles.cache.has(role.id))
-      .map(role => role.id));
-    const removedIds = new Set(oldMember.roles.cache
-      .filter(role => !newMember.roles.cache.has(role.id))
-      .map(role => role.id));
-
-    await new Promise(resolve => setTimeout(resolve, 1400));
+    // Use the exact role IDs recorded by Discord in THIS member's Audit Log $add.
+    // Never inspect the member's full role list to decide what to report.
+    await new Promise(resolve => setTimeout(resolve, 1800));
     const auditLogs = await newMember.guild.fetchAuditLogs({
       type: AuditLogEvent.MemberRoleUpdate,
-      limit: 20
+      limit: 25
     }).catch(() => null);
+
     const auditCandidates = [...(auditLogs?.entries.values() || [])]
       .filter(entry =>
         entry.target?.id === newMember.id &&
-        Date.now() - entry.createdTimestamp < 15000
+        Date.now() - entry.createdTimestamp < 20000
       )
       .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
+    // Pick only an entry that explicitly contains newly added role IDs.
     const auditEntry = auditCandidates.find(entry => {
-      const adds = entry.changes?.find(change => change.key === '$add')?.new;
-      const removes = entry.changes?.find(change => change.key === '$remove')?.new;
-      const addIds = new Set(Array.isArray(adds) ? adds.map(role => role.id) : []);
-      const removeIds = new Set(Array.isArray(removes) ? removes.map(role => role.id) : []);
-      const addMatch = [...addedIds].some(id => addIds.has(id));
-      const removeMatch = [...removedIds].some(id => removeIds.has(id));
-      return addMatch || removeMatch;
-    }) || auditCandidates[0] || null;
+      const added = entry.changes?.find(change => change.key === '$add')?.new;
+      return Array.isArray(added) && added.length > 0;
+    }) || null;
+
+    if (!auditEntry) {
+      console.log('[Anti Role] No matching $add Audit Log entry; nothing reported for ' + newMember.id);
+      return;
+    }
+
+    const addedRoleIds = new Set(
+      (auditEntry.changes.find(change => change.key === '$add')?.new || [])
+        .map(role => role.id)
+        .filter(Boolean)
+    );
 
     const dangerous = role =>
       role.permissions.has(PermissionsBitField.Flags.Administrator) ||
       role.permissions.has(PermissionsBitField.Flags.ManageRoles);
 
-    const addedRoles = [...addedIds]
+    // Report only dangerous roles explicitly listed in this Audit Log $add.
+    // Existing roles and removed roles are never considered.
+    const addedRoles = [...addedRoleIds]
       .map(id => newMember.guild.roles.cache.get(id))
-      .filter(role => role && dangerous(role));
+      .filter(role =>
+        role &&
+        newMember.roles.cache.has(role.id) &&
+        dangerous(role)
+      );
 
-    // Anti Role intentionally ignores every role the member already had and all role removals.
-    // It reports only dangerous roles newly present in this exact member update.
-    const actor = auditEntry?.executor || null;
+    const actor = auditEntry.executor || null;
     const logChannel = await dedicatedLog(CONFIG.autoRoleLogChannelId);
     if (!logChannel) {
       if (addedRoles.length) {
