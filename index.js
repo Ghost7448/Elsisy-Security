@@ -2044,9 +2044,9 @@ client.on(Events.InteractionCreate, async i => {
       if(!removable.length)throw new Error('لا توجد رولات من التنبيه يمكن للبوت إزالتها. قد تكون Managed أو أعلى من رتبة البوت.');
       await member.roles.remove(removable.map(role => role.id),'Anti Role '+operation+' by '+i.user.tag);
       detail = 'تمت إزالة '+removable.length+' رول: '+removable.map(role => role.name).join('، ') +
-        (skipped.length ? '\\nتعذر إزالة '+skipped.length+' رول بسبب الصلاحيات أو ترتيب الرولات.' : '');
+        (skipped.length ? '\nتعذر إزالة '+skipped.length+' رول بسبب الصلاحيات أو ترتيب الرولات.' : '');
       ok = skipped.length === 0;
-      if(skipped.length) detail = 'تمت إزالة بعض الرولات بنجاح، مع تعذر إزالة الباقي.\\n'+detail;
+      if(skipped.length) detail = 'تمت إزالة بعض الرولات بنجاح، مع تعذر إزالة الباقي.\n'+detail;
     }else if(operation==='kick'){
       if(!member.kickable)throw new Error('البوت لا يستطيع طرد هذا البوت بسبب الصلاحيات أو ترتيب الرولات.');
       markBotAction('kick', targetId);
@@ -2081,8 +2081,9 @@ client.on(Events.InteractionCreate, async i => {
   addFooter(status);
   let rows=[];
   if(prefix === 'autorole') {
+    const latestMember = await guild.members.fetch(targetId).catch(() => member);
     const remainingRoleIds = getAntiRoleIdsFromEmbed(original).filter(rid =>
-      member?.roles.cache.has(rid) && !(ok && (operation === 'removeall' || (operation === 'remove' && rid === targetRole)))
+      latestMember?.roles.cache.has(rid)
     );
     rows = autoRoleRows(targetId, remainingRoleIds);
   } else if(operation === 'kick' || operation === 'ban') {
