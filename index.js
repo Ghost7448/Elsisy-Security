@@ -1761,13 +1761,15 @@ function antiBotRows(id) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('antibot:kick:' + id).setLabel('Kick').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('antibot:ban:' + id).setLabel('Ban').setEmoji('⛔').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('antibot:trust:' + id).setLabel('Trust').setEmoji('✅').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('antibot:info:' + id).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
   );
 }
 function autoRoleRows(uid, roleIds = [], originalRoleIds = roleIds) {
   const buttons = [
     new ButtonBuilder().setCustomId('autorole:info:' + uid).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary),
-    ...roleIds.slice(0, 23).map(rid =>
+    new ButtonBuilder().setCustomId('autorole:trust:' + uid).setLabel('Trust').setEmoji('✅').setStyle(ButtonStyle.Success),
+    ...roleIds.slice(0, 22).map(rid =>
       new ButtonBuilder()
         .setCustomId('autorole:remove:' + uid + ':' + rid)
         .setLabel('Remove ' + (originalRoleIds.indexOf(rid) + 1))
@@ -2026,6 +2028,37 @@ client.on(Events.InteractionCreate, async i => {
   const p=i.customId.split(':'); const prefix=p[0], action=p[1], id=p[2], roleId=p[3];
   const isBot=prefix==='antibot'; const guild=await getProtectedGuild();
   if(!guild)return i.reply({content:'❌ تعذر العثور على سيرفر الحماية.',flags:64});
+  if (action === 'trust') {
+    const channel = await dedicatedLog(prefix === 'antibot'
+      ? CONFIG.antiBotLogChannelId
+      : CONFIG.autoRoleLogChannelId);
+    const infoCustomId = (prefix === 'antibot' ? 'antibot:info:' : 'autorole:info:') + id;
+    const msg = channel
+      ? await findDedicatedLogMessage(channel, infoCustomId)
+      : null;
+
+    if (!msg || msg.id !== i.message.id) {
+      return i.reply({ content: '❌ تعذر العثور على رسالة التنبيه الأصلية.', flags: 64 });
+    }
+
+    const trustedTitle = prefix === 'antibot'
+      ? '✅ ANTI BOT — TRUSTED'
+      : '✅ ANTI ROLE — TRUSTED';
+    const trustedDescription = prefix === 'antibot'
+      ? 'تم وضع علامة **Trusted** على هذا البوت بواسطة الإدارة. لن يتم تنفيذ أي إجراء من أزرار هذا التنبيه.'
+      : 'تم وضع علامة **Trusted** على الرول/الرولات الواردة في هذا التنبيه بواسطة الإدارة. لن يتم تنفيذ أي إجراء من أزرار هذا التنبيه.';
+
+    await updateDedicatedStatus(
+      msg,
+      trustedTitle,
+      trustedDescription + '\\n\\n🎯 الهدف: <@' + id + '>\\n🛡️ بواسطة: ' + i.user.toString(),
+      0x2E7D32,
+      true
+    );
+    await antiAdminDM('TRUST', id, i.user, true, 'تم وضع علامة Trusted وإزالة أزرار الإجراءات مع الإبقاء على زر المعلومات.');
+    return i.reply({ content: '✅ تم اعتماد العنصر كـ Trusted.', flags: 64 });
+  }
+
   if(action==='info'){
     const m=await guild.members.fetch(id).catch(()=>null);
     if(!m)return i.reply({content:'❌ الحساب لم يعد موجودًا في سيرفر الحماية.',flags:64});
