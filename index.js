@@ -2051,7 +2051,7 @@ client.on(Events.InteractionCreate, async i => {
     await updateDedicatedStatus(
       msg,
       trustedTitle,
-      trustedDescription + '\\n\\n🎯 الهدف: <@' + id + '>\\n🛡️ بواسطة: ' + i.user.toString(),
+      trustedDescription + '\n\n🎯 الهدف: <@' + id + '>\n🛡️ بواسطة: ' + i.user.toString(),
       0x2E7D32,
       true
     );
