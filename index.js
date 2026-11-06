@@ -2056,7 +2056,7 @@ client.on(Events.InteractionCreate, async i => {
       0x2E7D32,
       true
     );
-    await antiAdminDM('TRUST', id, i.user, true, 'تم وضع علامة Trusted وإزالة أزرار الإجراءات مع الإبقاء على زر المعلومات.');
+    await antiAdminDM('TRUST', id, i.user, true, 'تم وضع علامة Trusted');
     return i.reply({ content: '✅ تم اعتماد العنصر كـ Trusted.', flags: 64 });
   }
 
