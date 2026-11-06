@@ -1798,19 +1798,19 @@ async function findDedicatedLogMessage(channel, customId) {
     .filter(m => m.embeds.length && hasButton(m, customId))
     .sort((a,b) => b.createdTimestamp-a.createdTimestamp)[0] || null;
 }
-async function updateDedicatedStatus(message, title, description, color = 0x757575) {
+async function updateDedicatedStatus(message, title, description, color = 0x757575, preserveInfo = true) {
   if (!message?.embeds?.length) return;
   const embed = EmbedBuilder.from(message.embeds[0])
     .setColor(color).setTitle(title).setDescription(description).setTimestamp();
   addFooter(embed);
 
   // Keep the relevant info button on the log forever, even after status changes.
-  const infoButton = message.components
+  const infoButton = preserveInfo ? message.components
     .flatMap(row => row.components)
     .find(button =>
       button.customId?.startsWith('autorole:info:') ||
       button.customId?.startsWith('antibot:info:')
-    );
+    ) : null;
 
   const components = infoButton
     ? [new ActionRowBuilder().addComponents(
@@ -1887,14 +1887,12 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       .map(id => newMember.guild.roles.cache.get(id))
       .filter(role => role && dangerous(role));
 
-    const removedRoles = [...removedIds]
-      .map(id => oldMember.guild.roles.cache.get(id) || oldMember.roles.cache.get(id))
-      .filter(role => role && dangerous(role));
-
+    // Anti Role intentionally ignores every role the member already had and all role removals.
+    // It reports only dangerous roles newly present in this exact member update.
     const actor = auditEntry?.executor || null;
     const logChannel = await dedicatedLog(CONFIG.autoRoleLogChannelId);
     if (!logChannel) {
-      if (addedRoles.length || removedRoles.length) {
+      if (addedRoles.length) {
         console.error('[Anti Role] Missing AUTO_ROLE_LOG_CHANNEL_ID channel');
       }
       return;
@@ -1922,23 +1920,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       await logChannel.send({ embeds: [embed], components: [autoRoleRows(newMember.id, role.id)] });
     }
 
-    // If a monitored role was removed manually, update only the matching alert.
-    for (const role of removedRoles) {
-      const customId = 'autorole:remove:' + newMember.id + ':' + role.id;
-      const message = await findDedicatedLogMessage(logChannel, customId);
-      if (!message) continue;
 
-      const permission = role.permissions.has(PermissionsBitField.Flags.Administrator)
-        ? 'Administrator'
-        : 'Manage Roles';
-      await updateDedicatedStatus(
-        message,
-        '✅ ANTI ROLE — REMOVED BY ADMINISTRATION',
-        'تمت إزالة الرول يدويًا بواسطة الإدارة.\n\n🎯 العضو: <@' + newMember.id + '>\n🎭 الرول: ' + role.name +
-          '\n🔐 الصلاحية: ' + permission + '\n👮 بواسطة: ' + (actor ? actor.toString() : 'غير متاح من Audit Logs'),
-        0x2E7D32
-      );
-    }
   } catch (error) {
     console.error('[Anti Role Update]', error);
   }
@@ -1955,7 +1937,7 @@ client.on(Events.GuildMemberRemove, async member => {
     const msg = await findDedicatedLogMessage(ch, 'antibot:kick:' + member.id);
     if (!msg) return;
     await updateDedicatedStatus(msg, '🚫 ANTI BOT — MANUALLY KICKED',
-      'تم طرد البوت يدويًا من السيرفر.\n\n🤖 البوت: <@' + member.id + '>\n👮 بواسطة: ' + actor.toString(), 0xFF9800);
+      'تم طرد البوت يدويًا من السيرفر.\n\n🤖 البوت: <@' + member.id + '>\n👮 بواسطة: ' + actor.toString(), 0xFF9800, false);
   } catch (e) { console.error('[Anti Bot Manual Kick]', e); }
 });
 client.on(Events.GuildBanAdd, async ban => {
@@ -1968,7 +1950,7 @@ client.on(Events.GuildBanAdd, async ban => {
     const msg = await findDedicatedLogMessage(ch, 'antibot:ban:' + ban.user.id);
     if (!msg) return;
     await updateDedicatedStatus(msg, '⛔ ANTI BOT — MANUALLY BANNED',
-      'تم حظر البوت يدويًا من السيرفر.\n\n🤖 البوت: <@' + ban.user.id + '>\n👮 بواسطة: ' + actor.toString(), 0xE53935);
+      'تم حظر البوت يدويًا من السيرفر.\n\n🤖 البوت: <@' + ban.user.id + '>\n👮 بواسطة: ' + actor.toString(), 0xE53935, false);
   } catch (e) { console.error('[Anti Bot Manual Ban]', e); }
 });
 
@@ -2052,8 +2034,10 @@ client.on(Events.InteractionCreate, async i => {
       new ButtonBuilder().setCustomId('autorole:info:'+targetId+':'+targetRole)
         .setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary)
     )];
+  } else if(operation === 'kick' || operation === 'ban') {
+    // Once removed from the guild, Bot Info is no longer actionable.
+    rows = [];
   } else {
-    // Keep Bot Info visible after every completed Anti Bot action.
     rows = [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('antibot:info:'+targetId)
         .setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
