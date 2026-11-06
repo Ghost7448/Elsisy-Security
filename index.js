@@ -1778,8 +1778,9 @@ function autoRoleRows(uid, roleIds = [], originalRoleIds = roleIds) {
     )
   ];
 
-  // Keep Remove All available as long as at least one alerted role remains.
-  if (roleIds.length > 0) {
+  // Show Remove All only when at least two alerted roles remain.
+  // With one remaining role, keep only that role's individual Remove button.
+  if (roleIds.length > 1) {
     buttons.push(
       new ButtonBuilder()
         .setCustomId('autorole:removeall:' + uid)
