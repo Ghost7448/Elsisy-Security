@@ -29,6 +29,8 @@ const CONFIG = {
   logChannelId: process.env.LOG_CHANNEL_ID?.trim(),
   securityRoleId: process.env.SECURITY_ROLE_ID?.trim(),
   adminLogUserId: process.env.ADMIN_LOG_USER_ID?.trim(),
+  antiBotLogChannelId: process.env.ANTI_BOT_LOG_CHANNEL_ID?.trim(),
+  autoRoleLogChannelId: process.env.AUTO_ROLE_LOG_CHANNEL_ID?.trim(),
   timeoutMinutes: Math.max(1, Number(process.env.TIMEOUT_MINUTES || 60)),
   reason: process.env.TIMEOUT_REASON || 'إرسال رسالة داخل روم الحماية',
   footerIcon: process.env.FOOTER_ICON_URL?.trim() || ''
@@ -1724,6 +1726,179 @@ client.on(
     });
   }
 );
+
+
+/* ANTI BOT + ANTI ROLE */
+async function dedicatedLog(id) {
+  if (!id) return null;
+  const g = await getGuild(CONFIG.logGuildId);
+  if (!g) return null;
+  const c = await g.channels.fetch(id).catch(() => null);
+  return c && c.isTextBased() ? c : null;
+}
+async function securityAuditActor(guild, type, targetId) {
+  try {
+    await new Promise(r => setTimeout(r, 1200));
+    const logs = await guild.fetchAuditLogs({type, limit: 15});
+    const e = logs.entries.find(x => x.target && x.target.id === targetId && Date.now() - x.createdTimestamp < 30000);
+    return e ? e.executor : null;
+  } catch (e) { console.error('[Security Audit]', e); return null; }
+}
+async function antiAdminDM(action, targetId, actor, success, details) {
+  const admin = await client.users.fetch(CONFIG.adminLogUserId).catch(() => null);
+  if (!admin || admin.bot) return;
+  const e = new EmbedBuilder().setColor(success ? 0x2E7D32 : 0xE53935)
+    .setTitle('🛡️ SECURITY LOG — ' + action)
+    .addFields(
+      {name:'🎯 الهدف',value:'<@' + targetId + '>\\nID: ' + targetId},
+      {name:'👮 بواسطة',value:actor.toString() + '\\nID: ' + actor.id},
+      {name:'📌 النتيجة',value:(success ? '✅ تمت العملية\\n' : '❌ فشلت العملية\\n') + cut(details)}
+    ).setTimestamp();
+  addFooter(e); await admin.send({embeds:[e]}).catch(()=>{});
+}
+function antiBotRows(id) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('antibot:kick:' + id).setLabel('Kick').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('antibot:ban:' + id).setLabel('Ban').setEmoji('⛔').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('antibot:roles:' + id).setLabel('Remove All Roles').setEmoji('🧹').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('antibot:info:' + id).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
+  );
+}
+function autoRoleRows(uid, rid) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('autorole:info:' + uid + ':' + rid).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('autorole:remove:' + uid + ':' + rid).setLabel('Remove Role').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
+  );
+}
+function confirmRows(prefix, action, uid, rid) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(prefix + ':confirm:' + action + ':' + uid + ':' + (rid || 'none')).setLabel('تأكيد').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(prefix + ':cancel:' + action + ':' + uid + ':' + (rid || 'none')).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+  );
+}
+function securityInfoEmbed(member, guild, title) {
+  const roles = member.roles.cache.filter(r=>r.id!==guild.id).sort((a,b)=>b.position-a.position).map(r=>r.name).slice(0,20);
+  const ts = member.communicationDisabledUntilTimestamp;
+  const timeout = ts && ts>Date.now() ? '<t:'+Math.floor(ts/1000)+':F>\\n(<t:'+Math.floor(ts/1000)+':R>)' : '✅ لا يوجد Timeout حاليًا';
+  const e = new EmbedBuilder().setColor(0x5865F2).setTitle(title).setThumbnail(member.user.displayAvatarURL({size:256}))
+    .addFields(
+      {name:'👤 الاسم',value:member.user.toString()+'\\n'+(member.user.tag||member.user.username),inline:true},
+      {name:'🆔 User ID',value:member.id,inline:true},
+      {name:'🤖 النوع',value:member.user.bot?'Bot':'User',inline:true},
+      {name:'📅 إنشاء الحساب',value:'<t:'+Math.floor(member.user.createdTimestamp/1000)+':F>\\n(<t:'+Math.floor(member.user.createdTimestamp/1000)+':R>)'},
+      {name:'📥 دخول السيرفر',value:member.joinedTimestamp?'<t:'+Math.floor(member.joinedTimestamp/1000)+':F>\\n(<t:'+Math.floor(member.joinedTimestamp/1000)+':R>)':'غير متاح'},
+      {name:'⏱️ Timeout Status',value:timeout},
+      {name:'🎭 Roles ('+roles.length+')',value:roles.length?cut(roles.join('\\n')):'بدون رولات'}
+    ).setTimestamp();
+  addFooter(e); return e;
+}
+client.on(Events.GuildMemberAdd, async member => {
+  try {
+    const pg=await getProtectedGuild();
+    if(!pg || member.guild.id!==pg.id || !member.user.bot) return;
+    const ch=await dedicatedLog(CONFIG.antiBotLogChannelId);
+    if(!ch){console.error('[Anti Bot] Missing ANTI_BOT_LOG_CHANNEL_ID channel');return;}
+    const actor=await securityAuditActor(member.guild,AuditLogEvent.BotAdd,member.id);
+    const e=new EmbedBuilder().setColor(0xE53935).setTitle('🤖 ANTI BOT — NEW BOT DETECTED')
+      .setDescription('تم رصد دخول Bot جديد إلى سيرفر الحماية.')
+      .addFields(
+        {name:'🤖 البوت',value:member.user.toString()+'\\n'+(member.user.tag||member.user.username)+'\\nID: '+member.id},
+        {name:'👮 تمت إضافته بواسطة',value:actor?actor.toString()+'\\nID: '+actor.id:'غير متاح من Audit Logs'},
+        {name:'📅 إنشاء الحساب',value:'<t:'+Math.floor(member.user.createdTimestamp/1000)+':F>'}
+      ).setThumbnail(member.user.displayAvatarURL({size:256})).setTimestamp();
+    addFooter(e); await ch.send({embeds:[e],components:[antiBotRows(member.id)]});
+  } catch(e){console.error('[Anti Bot Join]',e);}
+});
+client.on(Events.GuildMemberUpdate, async (oldM,newM) => {
+  try {
+    const pg=await getProtectedGuild();
+    if(!pg || newM.guild.id!==pg.id) return;
+    const added=newM.roles.cache.filter(r=>!oldM.roles.cache.has(r.id) && (r.permissions.has(PermissionsBitField.Flags.Administrator)||r.permissions.has(PermissionsBitField.Flags.ManageRoles)));
+    if(!added.size)return;
+    const ch=await dedicatedLog(CONFIG.autoRoleLogChannelId);
+    if(!ch){console.error('[Anti Role] Missing AUTO_ROLE_LOG_CHANNEL_ID channel');return;}
+    const actor=await securityAuditActor(newM.guild,AuditLogEvent.MemberRoleUpdate,newM.id);
+    for(const role of added.values()){
+      const perms=[];
+      if(role.permissions.has(PermissionsBitField.Flags.Administrator))perms.push('Administrator');
+      if(role.permissions.has(PermissionsBitField.Flags.ManageRoles))perms.push('Manage Roles');
+      const e=new EmbedBuilder().setColor(0xE53935).setTitle('⚠️ ANTI ROLE — DANGEROUS ROLE ASSIGNED')
+        .setDescription('تم اكتشاف إعطاء عضو Role تحتوي على صلاحيات إدارية حساسة.')
+        .addFields(
+          {name:'👤 العضو',value:newM.user.toString()+'\\n'+(newM.user.tag||newM.user.username)+'\\nID: '+newM.id},
+          {name:'🎭 الرول المضافة',value:role.toString()+'\\n'+role.name+'\\nID: '+role.id},
+          {name:'🔐 الصلاحيات الخطيرة',value:perms.join('\\n')},
+          {name:'👮 بواسطة',value:actor?actor.toString()+'\\nID: '+actor.id:'غير متاح من Audit Logs'}
+        ).setThumbnail(newM.user.displayAvatarURL({size:256})).setTimestamp();
+      addFooter(e); await ch.send({embeds:[e],components:[autoRoleRows(newM.id,role.id)]});
+    }
+  }catch(e){console.error('[Anti Role]',e);}
+});
+client.on(Events.InteractionCreate, async i => {
+  if(!i.isButton() || (!i.customId.startsWith('antibot:')&&!i.customId.startsWith('autorole:')))return;
+  if(!canUseSecurityCommand(i))return i.reply({content:'❌ معندكش صلاحية تستخدم أزرار الحماية.',flags:64});
+  const p=i.customId.split(':'); const prefix=p[0], action=p[1], id=p[2], roleId=p[3];
+  const isBot=prefix==='antibot'; const guild=await getProtectedGuild();
+  if(!guild)return i.reply({content:'❌ تعذر العثور على سيرفر الحماية.',flags:64});
+  if(action==='info'){
+    const m=await guild.members.fetch(id).catch(()=>null);
+    if(!m)return i.reply({content:'❌ الحساب لم يعد موجودًا في سيرفر الحماية.',flags:64});
+    return i.reply({embeds:[securityInfoEmbed(m,guild,isBot?'🤖 BOT INFO':'👤 USER INFO')],flags:64});
+  }
+  if(['remove','kick','ban','roles'].includes(action)){
+    const m=await guild.members.fetch(id).catch(()=>null);
+    if(!m)return i.reply({content:'❌ الحساب لم يعد موجودًا في سيرفر الحماية.',flags:64});
+    if(action==='remove'&&(!roleId||!m.roles.cache.has(roleId)))return i.reply({content:'❌ الرول لم تعد موجودة على العضو.',flags:64});
+    const labels={remove:'إزالة الرول المحددة',kick:'طرد البوت',ban:'حظر البوت',roles:'إزالة كل الرولات القابلة للإزالة'};
+    const e=EmbedBuilder.from(i.message.embeds[0]).setColor(0xFF9800).setDescription('⚠️ هل أنت متأكد من تنفيذ **'+labels[action]+'** على <@'+id+'>؟');
+    return i.update({embeds:[e],components:[confirmRows(prefix,action,id,roleId)]});
+  }
+  if(action!=='confirm'&&action!=='cancel')return;
+  const operation=id, targetId=roleId, targetRole=p[4]==='none'?null:p[4];
+  const member=await guild.members.fetch(targetId).catch(()=>null);
+  const original=EmbedBuilder.from(i.message.embeds[0]);
+  if(action==='cancel'){
+    original.setColor(0x757575).setDescription('↩️ تم إلغاء العملية. لم يتم تنفيذ أي إجراء.');
+    return i.update({embeds:[original],components:[]});
+  }
+  await i.deferUpdate();
+  let ok=false, detail='', targetUser=member?member.user:null;
+  try{
+    if(!member)throw new Error('الحساب لم يعد موجودًا في السيرفر.');
+    if(operation==='remove'){
+      const role=guild.roles.cache.get(targetRole), me=guild.members.me;
+      if(!role||!member.roles.cache.has(targetRole))throw new Error('الرول لم تعد موجودة على العضو.');
+      if(role.managed||!me||role.position>=me.roles.highest.position)throw new Error('البوت لا يستطيع إزالة هذه الرول لأنها Managed أو أعلى من أعلى رول للبوت.');
+      await member.roles.remove(targetRole,'Anti Role removal by '+i.user.tag);
+      detail='تم إزالة الرول '+role.name+' من العضو.'; ok=true;
+    }else if(operation==='kick'){
+      if(!member.kickable)throw new Error('البوت لا يستطيع طرد هذا البوت بسبب الصلاحيات أو ترتيب الرولات.');
+      await member.kick('Anti Bot action by '+i.user.tag); detail='تم طرد البوت من السيرفر.'; ok=true;
+    }else if(operation==='ban'){
+      if(!member.bannable)throw new Error('البوت لا يستطيع حظر هذا البوت بسبب الصلاحيات أو ترتيب الرولات.');
+      await member.ban({reason:'Anti Bot action by '+i.user.tag}); detail='تم حظر البوت من السيرفر.'; ok=true;
+    }else if(operation==='roles'){
+      const me=guild.members.me; if(!me)throw new Error('تعذر تحديد أعلى رول للبوت.');
+      const removable=member.roles.cache.filter(r=>r.id!==guild.id&&!r.managed&&r.position<me.roles.highest.position);
+      const skipped=member.roles.cache.filter(r=>r.id!==guild.id&&(r.managed||r.position>=me.roles.highest.position));
+      if(removable.size)await member.roles.remove(removable,'Anti Bot remove roles by '+i.user.tag);
+      detail='تمت إزالة '+removable.size+' رول. الرولات غير القابلة للإزالة: '+skipped.size+'.'; ok=true;
+    }
+  }catch(e){detail=e.message||'حدث خطأ غير معروف.';}
+  const name=operation==='remove'?'REMOVE ROLE':operation.toUpperCase();
+  const status=EmbedBuilder.from(original).setColor(ok?0x2E7D32:0xE53935)
+    .setTitle((ok?'✅ ':'❌ ')+name+(ok?' — COMPLETED':' — FAILED'))
+    .setDescription((ok?'تم تنفيذ الإجراء بنجاح.':'تعذر تنفيذ الإجراء.')+'\\n\\n🎯 الهدف: <@'+targetId+'>\\n🛡️ بواسطة: '+i.user.toString()+'\\n\\n'+cut(detail)).setTimestamp();
+  addFooter(status);
+  let rows=[];
+  if(!ok)rows=operation==='remove'?[autoRoleRows(targetId,targetRole)]:[antiBotRows(targetId)];
+  else if(operation==='remove')rows=[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('autorole:info:'+targetId+':'+targetRole).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary))];
+  else if(operation==='roles')rows=[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('antibot:info:'+targetId).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary))];
+  await i.message.edit({embeds:[status],components:rows}).catch(()=>{});
+  await antiAdminDM(name,targetId,i.user,ok,detail);
+  if(!ok)await i.followUp({content:'❌ '+cut(detail),flags:64}).catch(()=>{});
+});
+
 
 /*
 ================================================
