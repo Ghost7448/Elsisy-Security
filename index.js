@@ -1795,8 +1795,10 @@ function autoRoleRows(uid, roleIds = [], originalRoleIds = roleIds) {
 }
 
 function getAntiRoleIdsFromEmbed(embed) {
-  const field = embed?.fields?.find(item => item.name === '🎭 الرولات الخطيرة المضافة');
-  if (!field) return [];
+  // Discord API embeds expose fields directly, while EmbedBuilder stores them in data.fields.
+  const fields = embed?.fields || embed?.data?.fields || [];
+  const field = fields.find(item => item.name === '🎭 الرولات الخطيرة المضافة');
+  if (!field || typeof field.value !== 'string') return [];
   return [...new Set([...field.value.matchAll(/ID: `([0-9]+)`/g)].map(match => match[1]))];
 }
 
