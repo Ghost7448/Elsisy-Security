@@ -1775,7 +1775,8 @@ function autoRoleRows(uid, roleIds = []) {
     )
   ];
 
-  if (roleIds.length) {
+  // Show Remove All only while at least two alerted roles remain.
+  if (roleIds.length > 1) {
     buttons.push(
       new ButtonBuilder()
         .setCustomId('autorole:removeall:' + uid)
