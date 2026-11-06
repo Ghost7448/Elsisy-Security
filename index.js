@@ -89,6 +89,7 @@ BOT ACTION TRACKING
 */
 
 const botActions = new Map();
+const processedAntiRoleAuditEntries = new Set();
 
 function markBotAction(type, userId) {
   const key = `${type}:${userId}`;
@@ -1876,8 +1877,8 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const pg = await getProtectedGuild();
     if (!pg || newMember.guild.id !== pg.id) return;
 
-    // Use the exact role IDs recorded by Discord in THIS member's Audit Log $add.
-    // Never inspect the member's full role list to decide what to report.
+    // Collect all recent $add entries for this member so rapid multi-role assignments
+    // are reported together in one Embed. Process each Audit Log entry only once.
     await new Promise(resolve => setTimeout(resolve, 1800));
     const auditLogs = await newMember.guild.fetchAuditLogs({
       type: AuditLogEvent.MemberRoleUpdate,
@@ -1887,33 +1888,40 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const auditCandidates = [...(auditLogs?.entries.values() || [])]
       .filter(entry =>
         entry.target?.id === newMember.id &&
-        Date.now() - entry.createdTimestamp < 20000
+        Date.now() - entry.createdTimestamp < 10000 &&
+        !processedAntiRoleAuditEntries.has(entry.id) &&
+        Array.isArray(entry.changes?.find(change => change.key === '$add')?.new) &&
+        entry.changes.find(change => change.key === '$add').new.length > 0
       )
-      .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
-    // Pick only an entry that explicitly contains newly added role IDs.
-    const auditEntry = auditCandidates.find(entry => {
-      const added = entry.changes?.find(change => change.key === '$add')?.new;
-      return Array.isArray(added) && added.length > 0;
-    }) || null;
-
-    if (!auditEntry) {
-      console.log('[Anti Role] No matching $add Audit Log entry; nothing reported for ' + newMember.id);
+    if (!auditCandidates.length) {
+      console.log('[Anti Role] No unprocessed $add Audit Log entries for ' + newMember.id);
       return;
     }
 
+    // Mark entries before continuing so multiple GuildMemberUpdate events cannot
+    // create duplicate alerts for the same role assignment.
+    for (const entry of auditCandidates) {
+      processedAntiRoleAuditEntries.add(entry.id);
+    }
+    if (processedAntiRoleAuditEntries.size > 5000) {
+      processedAntiRoleAuditEntries.clear();
+    }
+
     const addedRoleIds = new Set(
-      (auditEntry.changes.find(change => change.key === '$add')?.new || [])
-        .map(role => role.id)
-        .filter(Boolean)
+      auditCandidates.flatMap(entry =>
+        (entry.changes.find(change => change.key === '$add')?.new || [])
+          .map(role => role.id)
+          .filter(Boolean)
+      )
     );
 
     const dangerous = role =>
       role.permissions.has(PermissionsBitField.Flags.Administrator) ||
       role.permissions.has(PermissionsBitField.Flags.ManageRoles);
 
-    // Report only dangerous roles explicitly listed in this Audit Log $add.
-    // Existing roles and removed roles are never considered.
+    // Report only roles explicitly listed in the collected Audit Log $add entries.
     const addedRoles = [...addedRoleIds]
       .map(id => newMember.guild.roles.cache.get(id))
       .filter(role =>
@@ -1922,30 +1930,28 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         dangerous(role)
       );
 
-    const actor = auditEntry.executor || null;
+    if (!addedRoles.length) return;
+
+    const actor = auditCandidates.find(entry => entry.executor)?.executor || null;
     const logChannel = await dedicatedLog(CONFIG.autoRoleLogChannelId);
     if (!logChannel) {
-      if (addedRoles.length) {
-        console.error('[Anti Role] Missing AUTO_ROLE_LOG_CHANNEL_ID channel');
-      }
+      console.error('[Anti Role] Missing AUTO_ROLE_LOG_CHANNEL_ID channel');
       return;
     }
-
-    // Send one alert containing every dangerous role added in this Audit Log entry.
-    if (!addedRoles.length) return;
 
     const roleLines = addedRoles.map((role, index) => {
       const permission = role.permissions.has(PermissionsBitField.Flags.Administrator)
         ? 'Administrator'
         : 'Manage Roles';
-      return (index + 1) + '. ' + role.toString() + ' — ' + role.name +
-        '\n🔐 ' + permission + '\nID: `' + role.id + '`';
+      // Use the plain role name, not role.toString(), to avoid pinging @role.
+      return (index + 1) + '. **' + role.name + '**' +
+        '\n🔐 ' + permission + '\nID: \`' + role.id + '\`';
     });
 
     const embed = new EmbedBuilder()
       .setColor(0xE53935)
       .setTitle('⚠️ ANTI ROLE — DANGEROUS ROLES ASSIGNED')
-      .setDescription('تم رصد إضافة الرولات الخطيرة التالية في نفس التغيير. استخدم زر كل رول لإزالتها منفردة أو Remove All لإزالة كل الرولات المذكورة فقط.')
+      .setDescription('تم رصد إضافة الرولات الخطيرة التالية. استخدم زر كل رول لإزالتها منفردة أو Remove All لإزالة كل الرولات المذكورة فقط.')
       .addFields(
         { name: '👤 العضو', value: newMember.user.toString() + '\n' + (newMember.user.tag || newMember.user.username) + '\nID: ' + newMember.id },
         { name: '🎭 الرولات الخطيرة المضافة', value: cut(roleLines.join('\n\n'), 1024) },
@@ -1955,10 +1961,9 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       .setTimestamp();
     addFooter(embed);
 
-    // Discord allows at most 25 buttons per message: info + up to 23 role buttons + Remove All.
+    // One button per role, plus Remove All and User Info.
     const roleIds = addedRoles.map(role => role.id);
     await logChannel.send({ embeds: [embed], components: autoRoleRows(newMember.id, roleIds) });
-
 
   } catch (error) {
     console.error('[Anti Role Update]', error);
