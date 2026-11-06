@@ -2046,8 +2046,8 @@ client.on(Events.InteractionCreate, async i => {
       ? '✅ ANTI BOT — TRUSTED'
       : '✅ ANTI ROLE — TRUSTED';
     const trustedDescription = prefix === 'antibot'
-      ? 'تم وضع علامة **Trusted** على هذا البوت بواسطة الإدارة. لن يتم تنفيذ أي إجراء من أزرار هذا التنبيه.'
-      : 'تم وضع علامة **Trusted** على الرول/الرولات الواردة في هذا التنبيه بواسطة الإدارة. لن يتم تنفيذ أي إجراء من أزرار هذا التنبيه.';
+      ? 'تم وضع علامة **Trusted** .'
+      : 'تم وضع علامة **Trusted** ';
 
     await updateDedicatedStatus(
       msg,
