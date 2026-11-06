@@ -1799,6 +1799,26 @@ function getAntiRoleIdsFromEmbed(embed) {
   if (!field) return [];
   return [...new Set([...field.value.matchAll(/ID: `([0-9]+)`/g)].map(match => match[1]))];
 }
+
+function removeAntiRolesFromEmbed(embed, removedRoleIds) {
+  const removed = new Set(removedRoleIds);
+  const fields = embed.data.fields || [];
+  const fieldIndex = fields.findIndex(item => item.name === '🎭 الرولات الخطيرة المضافة');
+  if (fieldIndex === -1 || removed.size === 0) return;
+
+  const field = fields[fieldIndex];
+  const roleBlocks = String(field.value || '').split(/\n\s*\n/);
+  const remainingBlocks = roleBlocks.filter(block => {
+    const match = block.match(/ID: `([0-9]+)`/);
+    return !match || !removed.has(match[1]);
+  });
+
+  fields[fieldIndex] = {
+    ...field,
+    value: remainingBlocks.join('\n\n') || '✅ تمت إزالة كل الرولات المذكورة.'
+  };
+  embed.setFields(fields);
+}
 function confirmRows(prefix, action, uid, rid) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(prefix + ':confirm:' + action + ':' + uid + ':' + (rid || 'none')).setLabel('تأكيد').setStyle(ButtonStyle.Danger),
@@ -2032,6 +2052,7 @@ client.on(Events.InteractionCreate, async i => {
   }
   await i.deferUpdate();
   let ok=false, detail='', targetUser=member?member.user:null;
+  let successfullyRemovedRoleIds = [];
   try{
     if(!member)throw new Error('الحساب لم يعد موجودًا في السيرفر.');
     if(operation==='remove' || operation==='removeall'){
@@ -2040,15 +2061,17 @@ client.on(Events.InteractionCreate, async i => {
       const requestedIds = operation === 'remove'
         ? [targetRole]
         : getAntiRoleIdsFromEmbed(original);
+      const freshMember = await guild.members.fetch({ user: targetId, force: true });
       const removable = requestedIds
         .map(rid => guild.roles.cache.get(rid))
-        .filter(role => role && member.roles.cache.has(role.id) && !role.managed && role.position < me.roles.highest.position);
+        .filter(role => role && freshMember.roles.cache.has(role.id) && !role.managed && role.position < me.roles.highest.position);
       const skipped = requestedIds.filter(rid => {
         const role = guild.roles.cache.get(rid);
-        return member.roles.cache.has(rid) && (!role || role.managed || role.position >= me.roles.highest.position);
+        return freshMember.roles.cache.has(rid) && (!role || role.managed || role.position >= me.roles.highest.position);
       });
       if(!removable.length)throw new Error('لا توجد رولات من التنبيه يمكن للبوت إزالتها. قد تكون Managed أو أعلى من رتبة البوت.');
-      await member.roles.remove(removable.map(role => role.id),'Anti Role '+operation+' by '+i.user.tag);
+      successfullyRemovedRoleIds = removable.map(role => role.id);
+      await freshMember.roles.remove(successfullyRemovedRoleIds,'Anti Role '+operation+' by '+i.user.tag);
       detail = 'تمت إزالة '+removable.length+' رول: '+removable.map(role => role.name).join('، ') +
         (skipped.length ? '\nتعذر إزالة '+skipped.length+' رول بسبب الصلاحيات أو ترتيب الرولات.' : '');
       ok = skipped.length === 0;
@@ -2087,11 +2110,12 @@ client.on(Events.InteractionCreate, async i => {
   addFooter(status);
   let rows=[];
   if(prefix === 'autorole') {
-    const latestMember = await guild.members.fetch(targetId).catch(() => member);
-    const remainingRoleIds = getAntiRoleIdsFromEmbed(original).filter(rid =>
-      latestMember?.roles.cache.has(rid)
-    );
-    rows = autoRoleRows(targetId, remainingRoleIds, getAntiRoleIdsFromEmbed(original));
+    const originalRoleIds = getAntiRoleIdsFromEmbed(original);
+    const remainingRoleIds = originalRoleIds.filter(rid => !successfullyRemovedRoleIds.includes(rid));
+    if (successfullyRemovedRoleIds.length) {
+      removeAntiRolesFromEmbed(status, successfullyRemovedRoleIds);
+    }
+    rows = autoRoleRows(targetId, remainingRoleIds, originalRoleIds);
   } else if(operation === 'kick' || operation === 'ban') {
     // Once removed from the guild, Bot Info is no longer actionable.
     rows = [];
