@@ -1859,7 +1859,7 @@ client.on(Events.InteractionCreate, async i => {
   const original=EmbedBuilder.from(i.message.embeds[0]);
   if(action==='cancel'){
     original.setColor(0x757575).setDescription('↩️ تم إلغاء العملية. لم يتم تنفيذ أي إجراء.');
-    const restored = prefix === 'autorole' ? [autoRoleRows(targetId, roleId)] : [antiBotRows(targetId)];
+    const restored = prefix === 'autorole' ? [autoRoleRows(targetId, targetRole)] : [antiBotRows(targetId)];
     return i.update({embeds:[original],components:restored});
   }
   await i.deferUpdate();
