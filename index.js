@@ -1768,7 +1768,9 @@ function antiBotRows(id) {
 function autoRoleRows(uid, roleIds = [], originalRoleIds = roleIds) {
   const buttons = [
     new ButtonBuilder().setCustomId('autorole:info:' + uid).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('autorole:trust:' + uid).setLabel('Trust').setEmoji('✅').setStyle(ButtonStyle.Success),
+    ...(roleIds.length > 0
+      ? [new ButtonBuilder().setCustomId('autorole:trust:' + uid).setLabel('Trust').setEmoji('✅').setStyle(ButtonStyle.Success)]
+      : []),
     ...roleIds.slice(0, 22).map(rid =>
       new ButtonBuilder()
         .setCustomId('autorole:remove:' + uid + ':' + rid)
