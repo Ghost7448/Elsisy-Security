@@ -1750,9 +1750,9 @@ async function antiAdminDM(action, targetId, actor, success, details) {
   const e = new EmbedBuilder().setColor(success ? 0x2E7D32 : 0xE53935)
     .setTitle('🛡️ SECURITY LOG — ' + action)
     .addFields(
-      {name:'🎯 الهدف',value:'<@' + targetId + '>\\nID: ' + targetId},
-      {name:'👮 بواسطة',value:actor.toString() + '\\nID: ' + actor.id},
-      {name:'📌 النتيجة',value:(success ? '✅ تمت العملية\\n' : '❌ فشلت العملية\\n') + cut(details)}
+      {name:'🎯 الهدف',value:'<@' + targetId + '>\nID: ' + targetId},
+      {name:'👮 بواسطة',value:actor.toString() + '\nID: ' + actor.id},
+      {name:'📌 النتيجة',value:(success ? '✅ تمت العملية\n' : '❌ فشلت العملية\n') + cut(details)}
     ).setTimestamp();
   addFooter(e); await admin.send({embeds:[e]}).catch(()=>{});
 }
@@ -1779,16 +1779,16 @@ function confirmRows(prefix, action, uid, rid) {
 function securityInfoEmbed(member, guild, title) {
   const roles = member.roles.cache.filter(r=>r.id!==guild.id).sort((a,b)=>b.position-a.position).map(r=>r.name).slice(0,20);
   const ts = member.communicationDisabledUntilTimestamp;
-  const timeout = ts && ts>Date.now() ? '<t:'+Math.floor(ts/1000)+':F>\\n(<t:'+Math.floor(ts/1000)+':R>)' : '✅ لا يوجد Timeout حاليًا';
+  const timeout = ts && ts>Date.now() ? '<t:'+Math.floor(ts/1000)+':F>\n(<t:'+Math.floor(ts/1000)+':R>)' : '✅ لا يوجد Timeout حاليًا';
   const e = new EmbedBuilder().setColor(0x5865F2).setTitle(title).setThumbnail(member.user.displayAvatarURL({size:256}))
     .addFields(
-      {name:'👤 الاسم',value:member.user.toString()+'\\n'+(member.user.tag||member.user.username),inline:true},
+      {name:'👤 الاسم',value:member.user.toString()+'\n'+(member.user.tag||member.user.username),inline:true},
       {name:'🆔 User ID',value:member.id,inline:true},
       {name:'🤖 النوع',value:member.user.bot?'Bot':'User',inline:true},
-      {name:'📅 إنشاء الحساب',value:'<t:'+Math.floor(member.user.createdTimestamp/1000)+':F>\\n(<t:'+Math.floor(member.user.createdTimestamp/1000)+':R>)'},
-      {name:'📥 دخول السيرفر',value:member.joinedTimestamp?'<t:'+Math.floor(member.joinedTimestamp/1000)+':F>\\n(<t:'+Math.floor(member.joinedTimestamp/1000)+':R>)':'غير متاح'},
+      {name:'📅 إنشاء الحساب',value:'<t:'+Math.floor(member.user.createdTimestamp/1000)+':F>\n(<t:'+Math.floor(member.user.createdTimestamp/1000)+':R>)'},
+      {name:'📥 دخول السيرفر',value:member.joinedTimestamp?'<t:'+Math.floor(member.joinedTimestamp/1000)+':F>\n(<t:'+Math.floor(member.joinedTimestamp/1000)+':R>)':'غير متاح'},
       {name:'⏱️ Timeout Status',value:timeout},
-      {name:'🎭 Roles ('+roles.length+')',value:roles.length?cut(roles.join('\\n')):'بدون رولات'}
+      {name:'🎭 Roles ('+roles.length+')',value:roles.length?cut(roles.join('\n')):'بدون رولات'}
     ).setTimestamp();
   addFooter(e); return e;
 }
@@ -1802,8 +1802,8 @@ client.on(Events.GuildMemberAdd, async member => {
     const e=new EmbedBuilder().setColor(0xE53935).setTitle('🤖 ANTI BOT — NEW BOT DETECTED')
       .setDescription('تم رصد دخول Bot جديد إلى سيرفر الحماية.')
       .addFields(
-        {name:'🤖 البوت',value:member.user.toString()+'\\n'+(member.user.tag||member.user.username)+'\\nID: '+member.id},
-        {name:'👮 تمت إضافته بواسطة',value:actor?actor.toString()+'\\nID: '+actor.id:'غير متاح من Audit Logs'},
+        {name:'🤖 البوت',value:member.user.toString()+'\n'+(member.user.tag||member.user.username)+'\nID: '+member.id},
+        {name:'👮 تمت إضافته بواسطة',value:actor?actor.toString()+'\nID: '+actor.id:'غير متاح من Audit Logs'},
         {name:'📅 إنشاء الحساب',value:'<t:'+Math.floor(member.user.createdTimestamp/1000)+':F>'}
       ).setThumbnail(member.user.displayAvatarURL({size:256})).setTimestamp();
     addFooter(e); await ch.send({embeds:[e],components:[antiBotRows(member.id)]});
@@ -1825,10 +1825,10 @@ client.on(Events.GuildMemberUpdate, async (oldM,newM) => {
       const e=new EmbedBuilder().setColor(0xE53935).setTitle('⚠️ ANTI ROLE — DANGEROUS ROLE ASSIGNED')
         .setDescription('تم اكتشاف إعطاء عضو Role تحتوي على صلاحيات إدارية حساسة.')
         .addFields(
-          {name:'👤 العضو',value:newM.user.toString()+'\\n'+(newM.user.tag||newM.user.username)+'\\nID: '+newM.id},
-          {name:'🎭 الرول المضافة',value:role.toString()+'\\n'+role.name+'\\nID: '+role.id},
-          {name:'🔐 الصلاحيات الخطيرة',value:perms.join('\\n')},
-          {name:'👮 بواسطة',value:actor?actor.toString()+'\\nID: '+actor.id:'غير متاح من Audit Logs'}
+          {name:'👤 العضو',value:newM.user.toString()+'\n'+(newM.user.tag||newM.user.username)+'\nID: '+newM.id},
+          {name:'🎭 الرول المضافة',value:role.toString()+'\n'+role.name+'\nID: '+role.id},
+          {name:'🔐 الصلاحيات الخطيرة',value:perms.join('\n')},
+          {name:'👮 بواسطة',value:actor?actor.toString()+'\nID: '+actor.id:'غير متاح من Audit Logs'}
         ).setThumbnail(newM.user.displayAvatarURL({size:256})).setTimestamp();
       addFooter(e); await ch.send({embeds:[e],components:[autoRoleRows(newM.id,role.id)]});
     }
@@ -1859,7 +1859,8 @@ client.on(Events.InteractionCreate, async i => {
   const original=EmbedBuilder.from(i.message.embeds[0]);
   if(action==='cancel'){
     original.setColor(0x757575).setDescription('↩️ تم إلغاء العملية. لم يتم تنفيذ أي إجراء.');
-    return i.update({embeds:[original],components:[]});
+    const restored = prefix === 'autorole' ? [autoRoleRows(targetId, roleId)] : [antiBotRows(targetId)];
+    return i.update({embeds:[original],components:restored});
   }
   await i.deferUpdate();
   let ok=false, detail='', targetUser=member?member.user:null;
@@ -1888,7 +1889,7 @@ client.on(Events.InteractionCreate, async i => {
   const name=operation==='remove'?'REMOVE ROLE':operation.toUpperCase();
   const status=EmbedBuilder.from(original).setColor(ok?0x2E7D32:0xE53935)
     .setTitle((ok?'✅ ':'❌ ')+name+(ok?' — COMPLETED':' — FAILED'))
-    .setDescription((ok?'تم تنفيذ الإجراء بنجاح.':'تعذر تنفيذ الإجراء.')+'\\n\\n🎯 الهدف: <@'+targetId+'>\\n🛡️ بواسطة: '+i.user.toString()+'\\n\\n'+cut(detail)).setTimestamp();
+    .setDescription((ok?'تم تنفيذ الإجراء بنجاح.':'تعذر تنفيذ الإجراء.')+'\n\n🎯 الهدف: <@'+targetId+'>\n🛡️ بواسطة: '+i.user.toString()+'\n\n'+cut(detail)).setTimestamp();
   addFooter(status);
   let rows=[];
   if(!ok)rows=operation==='remove'?[autoRoleRows(targetId,targetRole)]:[antiBotRows(targetId)];
