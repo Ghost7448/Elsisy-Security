@@ -1787,11 +1787,26 @@ function securityInfoEmbed(member, guild, title) {
       {name:'🤖 النوع',value:member.user.bot?'Bot':'User',inline:true},
       {name:'📅 إنشاء الحساب',value:'<t:'+Math.floor(member.user.createdTimestamp/1000)+':F>\n(<t:'+Math.floor(member.user.createdTimestamp/1000)+':R>)'},
       {name:'📥 دخول السيرفر',value:member.joinedTimestamp?'<t:'+Math.floor(member.joinedTimestamp/1000)+':F>\n(<t:'+Math.floor(member.joinedTimestamp/1000)+':R>)':'غير متاح'},
-      {name:'⏱️ Timeout Status',value:timeout},
       {name:'🎭 Roles ('+roles.length+')',value:roles.length?cut(roles.join('\n')):'بدون رولات'}
     ).setTimestamp();
   addFooter(e); return e;
 }
+async function findDedicatedLogMessage(channel, customId) {
+  if (!channel?.isTextBased()) return null;
+  const messages = await channel.messages.fetch({limit:100}).catch(() => null);
+  if (!messages) return null;
+  return [...messages.values()]
+    .filter(m => m.embeds.length && hasButton(m, customId))
+    .sort((a,b) => b.createdTimestamp-a.createdTimestamp)[0] || null;
+}
+async function updateDedicatedStatus(message, title, description, color = 0x757575) {
+  if (!message?.embeds?.length) return;
+  const embed = EmbedBuilder.from(message.embeds[0])
+    .setColor(color).setTitle(title).setDescription(description).setTimestamp();
+  addFooter(embed);
+  await message.edit({embeds:[embed],components:[]}).catch(() => {});
+}
+
 client.on(Events.GuildMemberAdd, async member => {
   try {
     const pg=await getProtectedGuild();
@@ -1819,9 +1834,11 @@ client.on(Events.GuildMemberUpdate, async (oldM,newM) => {
     if(!ch){console.error('[Anti Role] Missing AUTO_ROLE_LOG_CHANNEL_ID channel');return;}
     const actor=await securityAuditActor(newM.guild,AuditLogEvent.MemberRoleUpdate,newM.id);
     for(const role of added.values()){
-      const perms=[];
-      if(role.permissions.has(PermissionsBitField.Flags.Administrator))perms.push('Administrator');
-      if(role.permissions.has(PermissionsBitField.Flags.ManageRoles))perms.push('Manage Roles');
+      const perms = role.permissions.has(PermissionsBitField.Flags.Administrator)
+        ? ['Administrator']
+        : role.permissions.has(PermissionsBitField.Flags.ManageRoles)
+          ? ['Manage Roles']
+          : [];
       const e=new EmbedBuilder().setColor(0xE53935).setTitle('⚠️ ANTI ROLE — DANGEROUS ROLE ASSIGNED')
         .setDescription('تم اكتشاف إعطاء عضو Role تحتوي على صلاحيات إدارية حساسة.')
         .addFields(
@@ -1834,6 +1851,66 @@ client.on(Events.GuildMemberUpdate, async (oldM,newM) => {
     }
   }catch(e){console.error('[Anti Role]',e);}
 });
+
+// Detect manual removal of a monitored dangerous role.
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  try {
+    const pg = await getProtectedGuild();
+    if (!pg || newMember.guild.id !== pg.id) return;
+    const removed = oldMember.roles.cache.filter(r =>
+      !newMember.roles.cache.has(r.id) &&
+      (r.permissions.has(PermissionsBitField.Flags.Administrator) ||
+       r.permissions.has(PermissionsBitField.Flags.ManageRoles))
+    );
+    if (!removed.size) return;
+    const ch = await dedicatedLog(CONFIG.autoRoleLogChannelId);
+    if (!ch) return;
+    for (const role of removed.values()) {
+      const customId = 'autorole:remove:' + newMember.id + ':' + role.id;
+      const msg = await findDedicatedLogMessage(ch, customId);
+      if (!msg) continue;
+      const actor = await securityAuditActor(newMember.guild, AuditLogEvent.MemberRoleUpdate, newMember.id);
+      const perms = role.permissions.has(PermissionsBitField.Flags.Administrator)
+        ? 'Administrator'
+        : 'Manage Roles';
+      await updateDedicatedStatus(
+        msg,
+        '✅ ANTI ROLE — ROLE REMOVED',
+        'تمت إزالة الرول الخطيرة من العضو.\n\n🎯 العضو: <@' + newMember.id + '>\n🎭 الرول: ' + role.name +
+        '\n🔐 الصلاحية: ' + perms + '\n🛡️ تمت الإزالة بواسطة: ' + (actor ? actor.toString() : 'غير متاح من Audit Logs')
+      , 0x2E7D32);
+    }
+  } catch (e) { console.error('[Anti Role Manual Removal]', e); }
+});
+
+// Detect manual kicks and bans of bots and update their original Anti Bot log.
+client.on(Events.GuildMemberRemove, async member => {
+  try {
+    const pg = await getProtectedGuild();
+    if (!pg || member.guild.id !== pg.id || !member.user.bot || isBotAction('kick', member.id)) return;
+    const actor = await securityAuditActor(member.guild, AuditLogEvent.MemberKick, member.id);
+    if (!actor) return;
+    const ch = await dedicatedLog(CONFIG.antiBotLogChannelId);
+    const msg = await findDedicatedLogMessage(ch, 'antibot:kick:' + member.id);
+    if (!msg) return;
+    await updateDedicatedStatus(msg, '🚫 ANTI BOT — MANUALLY KICKED',
+      'تم طرد البوت يدويًا من السيرفر.\n\n🤖 البوت: <@' + member.id + '>\n👮 بواسطة: ' + actor.toString(), 0xFF9800);
+  } catch (e) { console.error('[Anti Bot Manual Kick]', e); }
+});
+client.on(Events.GuildBanAdd, async ban => {
+  try {
+    const pg = await getProtectedGuild();
+    if (!pg || ban.guild.id !== pg.id || !ban.user.bot || isBotAction('ban', ban.user.id)) return;
+    const actor = await securityAuditActor(ban.guild, AuditLogEvent.MemberBanAdd, ban.user.id);
+    if (!actor) return;
+    const ch = await dedicatedLog(CONFIG.antiBotLogChannelId);
+    const msg = await findDedicatedLogMessage(ch, 'antibot:ban:' + ban.user.id);
+    if (!msg) return;
+    await updateDedicatedStatus(msg, '⛔ ANTI BOT — MANUALLY BANNED',
+      'تم حظر البوت يدويًا من السيرفر.\n\n🤖 البوت: <@' + ban.user.id + '>\n👮 بواسطة: ' + actor.toString(), 0xE53935);
+  } catch (e) { console.error('[Anti Bot Manual Ban]', e); }
+});
+
 client.on(Events.InteractionCreate, async i => {
   if(!i.isButton() || (!i.customId.startsWith('antibot:')&&!i.customId.startsWith('autorole:')))return;
   if(!canUseSecurityCommand(i))return i.reply({content:'❌ معندكش صلاحية تستخدم أزرار الحماية.',flags:64});
@@ -1874,16 +1951,22 @@ client.on(Events.InteractionCreate, async i => {
       detail='تم إزالة الرول '+role.name+' من العضو.'; ok=true;
     }else if(operation==='kick'){
       if(!member.kickable)throw new Error('البوت لا يستطيع طرد هذا البوت بسبب الصلاحيات أو ترتيب الرولات.');
+      markBotAction('kick', targetId);
       await member.kick('Anti Bot action by '+i.user.tag); detail='تم طرد البوت من السيرفر.'; ok=true;
     }else if(operation==='ban'){
       if(!member.bannable)throw new Error('البوت لا يستطيع حظر هذا البوت بسبب الصلاحيات أو ترتيب الرولات.');
+      markBotAction('ban', targetId);
       await member.ban({reason:'Anti Bot action by '+i.user.tag}); detail='تم حظر البوت من السيرفر.'; ok=true;
     }else if(operation==='roles'){
-      const me=guild.members.me; if(!me)throw new Error('تعذر تحديد أعلى رول للبوت.');
-      const removable=member.roles.cache.filter(r=>r.id!==guild.id&&!r.managed&&r.position<me.roles.highest.position);
-      const skipped=member.roles.cache.filter(r=>r.id!==guild.id&&(r.managed||r.position>=me.roles.highest.position));
-      if(removable.size)await member.roles.remove(removable,'Anti Bot remove roles by '+i.user.tag);
-      detail='تمت إزالة '+removable.size+' رول. الرولات غير القابلة للإزالة: '+skipped.size+'.'; ok=true;
+      const freshMember = await guild.members.fetch(targetId);
+      const me = await guild.members.fetch(client.user.id);
+      if(!me)throw new Error('تعذر تحديد أعلى رول للبوت.');
+      const removable = freshMember.roles.cache.filter(r => r.id !== guild.id && !r.managed && r.position < me.roles.highest.position);
+      const skipped = freshMember.roles.cache.filter(r => r.id !== guild.id && (r.managed || r.position >= me.roles.highest.position));
+      if(removable.size) await freshMember.roles.remove(removable.map(r => r.id), 'Anti Bot remove roles by '+i.user.tag);
+      const verified = await guild.members.fetch(targetId);
+      const remaining = verified.roles.cache.filter(r => r.id !== guild.id);
+      detail='تمت إزالة '+removable.size+' رول. الرولات/الصلاحيات المتبقية بسبب Managed أو ترتيب الرولات: '+skipped.size+'. الرولات المتبقية فعليًا: '+remaining.size+'.'; ok=true;
     }
   }catch(e){detail=e.message||'حدث خطأ غير معروف.';}
   const name=operation==='remove'?'REMOVE ROLE':operation.toUpperCase();
@@ -1894,7 +1977,11 @@ client.on(Events.InteractionCreate, async i => {
   let rows=[];
   if(!ok)rows=operation==='remove'?[autoRoleRows(targetId,targetRole)]:[antiBotRows(targetId)];
   else if(operation==='remove')rows=[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('autorole:info:'+targetId+':'+targetRole).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary))];
-  else if(operation==='roles')rows=[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('antibot:info:'+targetId).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary))];
+  else if(operation==='roles')rows=[new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('antibot:kick:'+targetId).setLabel('Kick').setEmoji('🚫').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('antibot:ban:'+targetId).setLabel('Ban').setEmoji('⛔').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('antibot:info:'+targetId).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
+  )];
   await i.message.edit({embeds:[status],components:rows}).catch(()=>{});
   await antiAdminDM(name,targetId,i.user,ok,detail);
   if(!ok)await i.followUp({content:'❌ '+cut(detail),flags:64}).catch(()=>{});
