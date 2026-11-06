@@ -1938,7 +1938,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         ? 'Administrator'
         : 'Manage Roles';
       return (index + 1) + '. ' + role.toString() + ' — ' + role.name +
-        '\\n🔐 ' + permission + '\\nID: `' + role.id + '`';
+        '\n🔐 ' + permission + '\nID: `' + role.id + '`';
     });
 
     const embed = new EmbedBuilder()
@@ -1946,9 +1946,9 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       .setTitle('⚠️ ANTI ROLE — DANGEROUS ROLES ASSIGNED')
       .setDescription('تم رصد إضافة الرولات الخطيرة التالية في نفس التغيير. استخدم زر كل رول لإزالتها منفردة أو Remove All لإزالة كل الرولات المذكورة فقط.')
       .addFields(
-        { name: '👤 العضو', value: newMember.user.toString() + '\\n' + (newMember.user.tag || newMember.user.username) + '\\nID: ' + newMember.id },
-        { name: '🎭 الرولات الخطيرة المضافة', value: cut(roleLines.join('\\n\\n'), 1024) },
-        { name: '👮 بواسطة', value: actor ? actor.toString() + '\\nID: ' + actor.id : 'غير متاح من Audit Logs' }
+        { name: '👤 العضو', value: newMember.user.toString() + '\n' + (newMember.user.tag || newMember.user.username) + '\nID: ' + newMember.id },
+        { name: '🎭 الرولات الخطيرة المضافة', value: cut(roleLines.join('\n\n'), 1024) },
+        { name: '👮 بواسطة', value: actor ? actor.toString() + '\nID: ' + actor.id : 'غير متاح من Audit Logs' }
       )
       .setThumbnail(newMember.user.displayAvatarURL({ size: 256 }))
       .setTimestamp();
