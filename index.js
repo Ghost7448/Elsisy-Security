@@ -1763,11 +1763,39 @@ function antiBotRows(id) {
     new ButtonBuilder().setCustomId('antibot:info:' + id).setLabel('Bot Info').setEmoji('🤖').setStyle(ButtonStyle.Secondary)
   );
 }
-function autoRoleRows(uid, rid) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('autorole:info:' + uid + ':' + rid).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('autorole:remove:' + uid + ':' + rid).setLabel('Remove Role').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
-  );
+function autoRoleRows(uid, roleIds = []) {
+  const buttons = [
+    new ButtonBuilder().setCustomId('autorole:info:' + uid).setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary),
+    ...roleIds.slice(0, 23).map((rid, index) =>
+      new ButtonBuilder()
+        .setCustomId('autorole:remove:' + uid + ':' + rid)
+        .setLabel('Remove ' + (index + 1))
+        .setEmoji('🗑️')
+        .setStyle(ButtonStyle.Danger)
+    )
+  ];
+
+  if (roleIds.length) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId('autorole:removeall:' + uid)
+        .setLabel('Remove All')
+        .setEmoji('⛔')
+        .setStyle(ButtonStyle.Danger)
+    );
+  }
+
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 5) {
+    rows.push(new ActionRowBuilder().addComponents(buttons.slice(index, index + 5)));
+  }
+  return rows;
+}
+
+function getAntiRoleIdsFromEmbed(embed) {
+  const field = embed?.fields?.find(item => item.name === '🎭 الرولات الخطيرة المضافة');
+  if (!field) return [];
+  return [...new Set([...field.value.matchAll(/ID:\\s*\x60(\\d+)\x60/g)].map(match => match[1]))];
 }
 function confirmRows(prefix, action, uid, rid) {
   return new ActionRowBuilder().addComponents(
@@ -1902,27 +1930,33 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       return;
     }
 
-    // Only report roles that Discord says were added in this specific update.
-    for (const role of addedRoles) {
+    // Send one alert containing every dangerous role added in this Audit Log entry.
+    if (!addedRoles.length) return;
+
+    const roleLines = addedRoles.map((role, index) => {
       const permission = role.permissions.has(PermissionsBitField.Flags.Administrator)
         ? 'Administrator'
         : 'Manage Roles';
+      return (index + 1) + '. ' + role.toString() + ' — ' + role.name +
+        '\\n🔐 ' + permission + '\\nID: `' + role.id + '`';
+    });
 
-      const embed = new EmbedBuilder()
-        .setColor(0xE53935)
-        .setTitle('⚠️ ANTI ROLE — DANGEROUS ROLE ASSIGNED')
-        .setDescription('تم رصد إضافة الرول الخطيرة التالية فقط في هذا التغيير.')
-        .addFields(
-          { name: '👤 العضو', value: newMember.user.toString() + '\n' + (newMember.user.tag || newMember.user.username) + '\nID: ' + newMember.id },
-          { name: '🎭 الرول المضافة', value: role.toString() + '\n' + role.name + '\nID: ' + role.id },
-          { name: '🔐 الصلاحية الخطيرة', value: permission },
-          { name: '👮 بواسطة', value: actor ? actor.toString() + '\nID: ' + actor.id : 'غير متاح من Audit Logs' }
-        )
-        .setThumbnail(newMember.user.displayAvatarURL({ size: 256 }))
-        .setTimestamp();
-      addFooter(embed);
-      await logChannel.send({ embeds: [embed], components: [autoRoleRows(newMember.id, role.id)] });
-    }
+    const embed = new EmbedBuilder()
+      .setColor(0xE53935)
+      .setTitle('⚠️ ANTI ROLE — DANGEROUS ROLES ASSIGNED')
+      .setDescription('تم رصد إضافة الرولات الخطيرة التالية في نفس التغيير. استخدم زر كل رول لإزالتها منفردة أو Remove All لإزالة كل الرولات المذكورة فقط.')
+      .addFields(
+        { name: '👤 العضو', value: newMember.user.toString() + '\\n' + (newMember.user.tag || newMember.user.username) + '\\nID: ' + newMember.id },
+        { name: '🎭 الرولات الخطيرة المضافة', value: cut(roleLines.join('\\n\\n'), 1024) },
+        { name: '👮 بواسطة', value: actor ? actor.toString() + '\\nID: ' + actor.id : 'غير متاح من Audit Logs' }
+      )
+      .setThumbnail(newMember.user.displayAvatarURL({ size: 256 }))
+      .setTimestamp();
+    addFooter(embed);
+
+    // Discord allows at most 25 buttons per message: info + up to 23 role buttons + Remove All.
+    const roleIds = addedRoles.map(role => role.id);
+    await logChannel.send({ embeds: [embed], components: autoRoleRows(newMember.id, roleIds) });
 
 
   } catch (error) {
@@ -1969,13 +2003,15 @@ client.on(Events.InteractionCreate, async i => {
     if(!m)return i.reply({content:'❌ الحساب لم يعد موجودًا في سيرفر الحماية.',flags:64});
     return i.reply({embeds:[securityInfoEmbed(m,guild,isBot?'🤖 BOT INFO':'👤 USER INFO')],flags:64});
   }
-  if(['remove','kick','ban','roles'].includes(action)){
+  if(['remove','removeall','kick','ban','roles'].includes(action)){
     const m=await guild.members.fetch(id).catch(()=>null);
     if(!m)return i.reply({content:'❌ الحساب لم يعد موجودًا في سيرفر الحماية.',flags:64});
-    if(action==='remove'&&(!roleId||!m.roles.cache.has(roleId)))return i.reply({content:'❌ الرول لم تعد موجودة على العضو.',flags:64});
-    const labels={remove:'إزالة الرول المحددة',kick:'طرد البوت',ban:'حظر البوت',roles:'إزالة كل الرولات القابلة للإزالة'};
+    const listedRoleIds = prefix === 'autorole' ? getAntiRoleIdsFromEmbed(i.message.embeds[0]) : [];
+    if(action==='remove'&&(!roleId||!listedRoleIds.includes(roleId)||!m.roles.cache.has(roleId)))return i.reply({content:'❌ الرول المحددة لم تعد ضمن التنبيه أو لم تعد موجودة على العضو.',flags:64});
+    if(action==='removeall'&&!listedRoleIds.some(rid=>m.roles.cache.has(rid)))return i.reply({content:'❌ لا توجد رولات من التنبيه ما زالت على العضو.',flags:64});
+    const labels={remove:'إزالة الرول المحددة فقط',removeall:'إزالة كل الرولات المذكورة في التنبيه فقط',kick:'طرد البوت',ban:'حظر البوت',roles:'إزالة كل الرولات القابلة للإزالة'};
     const e=EmbedBuilder.from(i.message.embeds[0]).setColor(0xFF9800).setDescription('⚠️ هل أنت متأكد من تنفيذ **'+labels[action]+'** على <@'+id+'>؟');
-    return i.update({embeds:[e],components:[confirmRows(prefix,action,id,roleId)]});
+    return i.update({embeds:[e],components:[confirmRows(prefix,action,id,roleId || 'none')]});
   }
   if(action!=='confirm'&&action!=='cancel')return;
   const operation=id, targetId=roleId, targetRole=p[4]==='none'?null:p[4];
@@ -1983,19 +2019,34 @@ client.on(Events.InteractionCreate, async i => {
   const original=EmbedBuilder.from(i.message.embeds[0]);
   if(action==='cancel'){
     original.setColor(0x757575).setDescription('↩️ تم إلغاء العملية. لم يتم تنفيذ أي إجراء.');
-    const restored = prefix === 'autorole' ? [autoRoleRows(targetId, targetRole)] : [antiBotRows(targetId)];
+    const restored = prefix === 'autorole'
+      ? autoRoleRows(targetId, getAntiRoleIdsFromEmbed(original))
+      : [antiBotRows(targetId)];
     return i.update({embeds:[original],components:restored});
   }
   await i.deferUpdate();
   let ok=false, detail='', targetUser=member?member.user:null;
   try{
     if(!member)throw new Error('الحساب لم يعد موجودًا في السيرفر.');
-    if(operation==='remove'){
-      const role=guild.roles.cache.get(targetRole), me=guild.members.me;
-      if(!role||!member.roles.cache.has(targetRole))throw new Error('الرول لم تعد موجودة على العضو.');
-      if(role.managed||!me||role.position>=me.roles.highest.position)throw new Error('البوت لا يستطيع إزالة هذه الرول لأنها Managed أو أعلى من أعلى رول للبوت.');
-      await member.roles.remove(targetRole,'Anti Role removal by '+i.user.tag);
-      detail='تم إزالة الرول '+role.name+' من العضو.'; ok=true;
+    if(operation==='remove' || operation==='removeall'){
+      const me = await guild.members.fetch(client.user.id);
+      if(!me)throw new Error('تعذر تحديد أعلى رول للبوت.');
+      const requestedIds = operation === 'remove'
+        ? [targetRole]
+        : getAntiRoleIdsFromEmbed(original);
+      const removable = requestedIds
+        .map(rid => guild.roles.cache.get(rid))
+        .filter(role => role && member.roles.cache.has(role.id) && !role.managed && role.position < me.roles.highest.position);
+      const skipped = requestedIds.filter(rid => {
+        const role = guild.roles.cache.get(rid);
+        return member.roles.cache.has(rid) && (!role || role.managed || role.position >= me.roles.highest.position);
+      });
+      if(!removable.length)throw new Error('لا توجد رولات من التنبيه يمكن للبوت إزالتها. قد تكون Managed أو أعلى من رتبة البوت.');
+      await member.roles.remove(removable.map(role => role.id),'Anti Role '+operation+' by '+i.user.tag);
+      detail = 'تمت إزالة '+removable.length+' رول: '+removable.map(role => role.name).join('، ') +
+        (skipped.length ? '\\nتعذر إزالة '+skipped.length+' رول بسبب الصلاحيات أو ترتيب الرولات.' : '');
+      ok = skipped.length === 0;
+      if(skipped.length) detail = 'تمت إزالة بعض الرولات بنجاح، مع تعذر إزالة الباقي.\\n'+detail;
     }else if(operation==='kick'){
       if(!member.kickable)throw new Error('البوت لا يستطيع طرد هذا البوت بسبب الصلاحيات أو ترتيب الرولات.');
       markBotAction('kick', targetId);
@@ -2023,21 +2074,17 @@ client.on(Events.InteractionCreate, async i => {
       ok=true;
     }
   }catch(e){detail=e.message||'حدث خطأ غير معروف.';}
-  const name=operation==='remove'?'REMOVE ROLE':operation.toUpperCase();
+  const name=operation==='remove'?'REMOVE ROLE':operation==='removeall'?'REMOVE ALL ROLES':operation.toUpperCase();
   const status=EmbedBuilder.from(original).setColor(ok?0x2E7D32:0xE53935)
     .setTitle((ok?'✅ ':'❌ ')+name+(ok?' — COMPLETED':' — FAILED'))
     .setDescription((ok?'تم تنفيذ الإجراء بنجاح.':'تعذر تنفيذ الإجراء.')+'\n\n🎯 الهدف: <@'+targetId+'>\n🛡️ بواسطة: '+i.user.toString()+'\n\n'+cut(detail)).setTimestamp();
   addFooter(status);
   let rows=[];
-  if(!ok) {
-    rows = operation === 'remove'
-      ? [autoRoleRows(targetId,targetRole)]
-      : [antiBotRows(targetId)];
-  } else if(operation === 'remove') {
-    rows = [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('autorole:info:'+targetId+':'+targetRole)
-        .setLabel('User Info').setEmoji('🪪').setStyle(ButtonStyle.Secondary)
-    )];
+  if(prefix === 'autorole') {
+    const remainingRoleIds = getAntiRoleIdsFromEmbed(original).filter(rid =>
+      member?.roles.cache.has(rid) && !(ok && (operation === 'removeall' || (operation === 'remove' && rid === targetRole)))
+    );
+    rows = autoRoleRows(targetId, remainingRoleIds);
   } else if(operation === 'kick' || operation === 'ban') {
     // Once removed from the guild, Bot Info is no longer actionable.
     rows = [];
