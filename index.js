@@ -1995,6 +1995,147 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   }
 });
 
+// Detect dangerous roles removed manually and update the matching Anti Role alert.
+const processedAntiRoleRemovalEntries = new Set();
+
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  try {
+    const pg = await getProtectedGuild();
+    if (!pg || newMember.guild.id !== pg.id) return;
+
+    const removedFromCache = oldMember.roles.cache
+      .filter(role => role.id !== newMember.guild.id && !newMember.roles.cache.has(role.id))
+      .map(role => role.id);
+    if (!removedFromCache.length) return;
+
+    // Give Discord time to write the corresponding $remove Audit Log entry.
+    await new Promise(resolve => setTimeout(resolve, 1400));
+    const logs = await newMember.guild.fetchAuditLogs({
+      type: AuditLogEvent.MemberRoleUpdate,
+      limit: 25
+    }).catch(() => null);
+    if (!logs) return;
+
+    const removedSet = new Set(removedFromCache);
+    const candidates = [...logs.entries.values()]
+      .filter(entry => {
+        if (entry.target?.id !== newMember.id) return false;
+        if (Date.now() - entry.createdTimestamp > 15000) return false;
+        if (processedAntiRoleRemovalEntries.has(entry.id)) return false;
+        const change = entry.changes?.find(item => item.key === '$remove');
+        return Array.isArray(change?.new) &&
+          change.new.some(role => removedSet.has(role.id));
+      })
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+
+    if (!candidates.length) return;
+    const auditEntry = candidates[0];
+    processedAntiRoleRemovalEntries.add(auditEntry.id);
+    if (processedAntiRoleRemovalEntries.size > 5000) {
+      processedAntiRoleRemovalEntries.clear();
+    }
+
+    const removeChange = auditEntry.changes.find(item => item.key === '$remove');
+    const manuallyRemovedIds = [...new Set(
+      (removeChange?.new || [])
+        .map(role => role.id)
+        .filter(id => removedSet.has(id))
+    )];
+    if (!manuallyRemovedIds.length) return;
+
+    const channel = await dedicatedLog(CONFIG.autoRoleLogChannelId);
+    if (!channel) return;
+    const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages) return;
+
+    // Update only the newest active alert for this member that contains one
+    // of the roles confirmed as removed by this Audit Log entry.
+    const matchingMessage = [...messages.values()]
+      .filter(message => {
+        if (!message.embeds.length) return false;
+        const roleIds = getAntiRoleIdsFromEmbed(message.embeds[0]);
+        if (!roleIds.some(id => manuallyRemovedIds.includes(id))) return false;
+        const hasMember = message.embeds[0].fields?.some(field =>
+          field.name === '👤 العضو' && field.value.includes(newMember.id)
+        );
+        return hasMember && message.components.some(row =>
+          row.components.some(button =>
+            button.customId?.startsWith('autorole:remove:' + newMember.id + ':')
+          )
+        );
+      })
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)[0];
+
+    if (!matchingMessage) return;
+
+    const originalEmbed = matchingMessage.embeds[0];
+    const originalRoleIds = getAntiRoleIdsFromEmbed(originalEmbed);
+    const actuallyRemoved = manuallyRemovedIds.filter(id => originalRoleIds.includes(id));
+    if (!actuallyRemoved.length) return;
+
+    const updatedEmbed = EmbedBuilder.from(originalEmbed);
+    removeAntiRolesFromEmbed(updatedEmbed, actuallyRemoved);
+    const remainingRoleIds = getAntiRoleIdsFromEmbed(updatedEmbed);
+    const actor = auditEntry.executor;
+    const removedNames = actuallyRemoved.map(id =>
+      newMember.guild.roles.cache.get(id)?.name || id
+    );
+
+    if (remainingRoleIds.length === 0) {
+      updatedEmbed
+        .setColor(0x2E7D32)
+        .setTitle('✅ ANTI ROLE — ALL ROLES REMOVED MANUALLY')
+        .setDescription(
+          '**تم إزالة الرول/الرولات يدويًا بواسطة الإدارة.**\n\n' +
+          '👤 العضو: <@' + newMember.id + '>\n' +
+          '🎭 الرولات التي تمت إزالتها: ' + cut(removedNames.join('، ')) + '\n' +
+          '🛡️ بواسطة: ' + (actor ? actor.toString() : 'الإدارة')
+        )
+        .setTimestamp();
+
+      addFooter(updatedEmbed);
+      await matchingMessage.edit({
+        embeds: [updatedEmbed],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('autorole:info:' + newMember.id)
+              .setLabel('User Info')
+              .setEmoji('🪪')
+              .setStyle(ButtonStyle.Secondary)
+          )
+        ]
+      });
+    } else {
+      updatedEmbed
+        .setColor(0xE53935)
+        .setTitle('⚠️ ANTI ROLE — ROLE REMOVED MANUALLY')
+        .setDescription(
+          '**تم إزالة رول خطيرة يدويًا بواسطة الإدارة.**\n\n' +
+          '👤 العضو: <@' + newMember.id + '>\n' +
+          '🎭 الرول/الرولات التي تمت إزالتها: ' + cut(removedNames.join('، ')) + '\n' +
+          '🛡️ بواسطة: ' + (actor ? actor.toString() : 'الإدارة') +
+          '\n\nالرولات الخطيرة المتبقية موضحة بالأسفل.'
+        )
+        .setTimestamp();
+
+      addFooter(updatedEmbed);
+      await matchingMessage.edit({
+        embeds: [updatedEmbed],
+        components: autoRoleRows(newMember.id, remainingRoleIds, originalRoleIds)
+      });
+    }
+
+    console.log(
+      '[Anti Role Manual Removal] ' + newMember.id +
+      ' removed: ' + actuallyRemoved.join(', ') +
+      ' by ' + (actor?.id || 'unknown')
+    );
+  } catch (error) {
+    console.error('[Anti Role Manual Removal]', error);
+  }
+});
+
 // Detect manual kicks and bans of bots and update their original Anti Bot log.
 client.on(Events.GuildMemberRemove, async member => {
   try {
